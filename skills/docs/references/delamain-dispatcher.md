@@ -40,6 +40,11 @@ Authored manifest-sidecar declarations come from an optional `runtime-manifest.c
 
 Budget resolution is hybrid for backward compatibility: `maxBudgetUsdByProvider[provider] ?? maxBudgetUsd ?? providerDefault`. The canonical defaults are `openai: 50` and `anthropic: 20`, which intentionally give Codex-heavy dev dispatches more headroom than Anthropic reviewer-style runs.
 
+Merge-back success now has two explicit shapes:
+
+- **Plain-host systems** — success means the host integration commit lands locally and is published to the host repo's canonical upstream ref.
+- **Submodule-bearing systems** — success means the host integration commit lands locally, each mounted-submodule integrated head is published to that submodule's canonical upstream ref, and the host gitlink records that exact integrated mounted-submodule head.
+
 The dispatcher is supported from deployed `.claude/delamains/<name>/` bundles. Authored module bundles do not carry dispatcher source in ALS v2+, and the operator-side installed source lives under `.als/constructs/delamain-dispatcher/<name>/`.
 
 ## Telemetry Files
@@ -92,6 +97,7 @@ Entry point. Handles:
 - **Effective limits**: resolves `runtime-manifest.json.limits` once at startup, applies `maxBudgetUsdByProvider[provider] ?? maxBudgetUsd ?? providerDefault`, falls back to canonical defaults `anthropic: 20` / `openai: 50` when absent, and logs `maxTurns` plus the active per-provider budget map before polling.
 - **Runtime boot**: creates one `DispatcherRuntime`, runs orphan sweep at startup, and keeps the persisted dispatch registry as the source of truth for active, blocked, orphaned, and guarded ownership.
 - **Poll loop**: scans items at a configurable interval (`POLL_MS`, default 30s). Reads committed `HEAD` state only, warns when a status transition exists in the checkout but not in `HEAD`, reconciles registry records against current item status, retries blocked `dirty_integration_checkout` merge-backs under the existing repo-mutation lease, suppresses redispatch for all other unresolved incidents, runs periodic orphan sweeping, and refreshes the heartbeat after dispatch completions.
+- **Blocked merge taxonomy**: keeps `dirty_integration_checkout` as the only automatic retry path. Other merge-back failures stay preserved and cause-specific, including `tracked_path_conflict`, `submodule_concurrent_advance`, `merge_back_publish_failed`, `canonical_upstream_unsynced`, and `submodule_pointer_invariant_violation`.
 - **Runtime hardening**: keeps the event loop alive with an internal keepalive server, logs tick and process lifecycle events, and ignores stray `SIGTERM` so dispatcher children do not accidentally kill the parent runtime.
 
 ### `src/preflight.ts`
@@ -131,11 +137,13 @@ Git-backed isolation strategy.
 - Creates host worktrees under `~/.worktrees/delamain/<dispatcher>/<item>/<dispatch-id>/`
 - Mounts any declared `runtime-manifest.json.submodules` as nested git worktrees at the same repo-relative paths inside that host worktree
 - Rewrites bound item paths into the isolated workspace
-- Auto-commits isolated worktrees into provisional single-commit snapshots, refreshes stale worktrees by merging current primary `HEAD` into the isolated checkout, fast-forwards mounted primaries first, pushes each mounted dispatch branch to the submodule `origin`, repoints the mounted checkout to the integrated SHA, then fast-forwards the host checkout to the refreshed worktree commit
-- If a host refresh stops on `UU <submodule>` conflicts only, performs a narrow mechanical reconciliation by merging the conflicting submodule SHA inside each mounted checkout, staging the resolved gitlink back into the host worktree, and sealing the outer merge with the dispatcher signature message
-- Blocks submodule-origin push failures as `submodule_push_failed`, preserving the host and mounted worktrees instead of landing an unreachable gitlink SHA
+- Auto-commits isolated worktrees into provisional single-commit snapshots, refreshes mounted submodules before the host, absorbs orthogonal host-head movement by replaying the dispatch delta onto the new host `HEAD`, then integrates the refreshed result under one repo-mutation transaction
+- Uses `git ls-files -u` to detect gitlink-only host conflicts and mechanically reconcile descendant-shaped mounted-submodule advances by merging the incoming submodule SHA inside the mounted checkout, staging the reconciled gitlink back into the host worktree, and sealing the outer merge with the dispatcher signature message
+- Verifies submodule-bearing success invariants before reporting success: each mounted primary fast-forwards to the integrated head, the host gitlink equals that exact integrated head, each mounted primary publishes to its canonical upstream ref, and the host repo publishes its integration commit to its canonical upstream ref
+- Blocks canonical-upstream push failures as `merge_back_publish_failed`, blocks post-push remote mismatches as `canonical_upstream_unsynced`, and blocks host/submodule pointer mismatches as `submodule_pointer_invariant_violation`
+- Treats true overlapping host-content conflicts as `tracked_path_conflict` and true submodule-concurrency conflicts as `submodule_concurrent_advance`
 - Treats dirty integration checkouts as a retryable wait condition; once the operator cleans the tree, the poll loop re-runs refresh + merge-back under the same lease and escalates long-lived waits to `primary_dirty_timeout`
-- Blocks concurrent-overlap refresh failures as `stale_base_conflict`, preserving the host and mounted worktrees for operator or agent-assist follow-up
+- Keeps `stale_base_conflict` for the narrower "recorded base is no longer an ancestor of current HEAD" case, preserving the host and mounted worktrees for operator or agent-assist follow-up
 - Rolls back already-integrated primary clones if a later repo in the merge transaction fails, leaving the host worktree and mounted submodule worktrees preserved for inspection
 
 ### `src/repo-mutation-lock.ts`
