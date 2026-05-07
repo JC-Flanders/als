@@ -48,7 +48,7 @@ test("worktree isolation rewrites item paths into a per-dispatch workspace", asy
 });
 
 test("runtime merges clean dispatch edits back into the integration checkout", async () => {
-  await withWorktreeSandbox("merge-clean", async ({ runtime, systemRoot, itemFile }) => {
+  await withWorktreeSandbox("merge-clean", async ({ runtime, systemRoot, hostOrigin, itemFile }) => {
     const prepared = await runtime.prepareDispatch("ALS-001", itemFile, ENTRY);
     expect(prepared).not.toBeNull();
 
@@ -70,6 +70,9 @@ test("runtime merges clean dispatch edits back into the integration checkout", a
     expect(existsSync(prepared!.worktreePath)).toBe(false);
     expect(await runtime.hasOpenRecord("ALS-001")).toBe(false);
     expect(await runGit(systemRoot, ["log", "-1", "--pretty=%P"])).toBe(prepared!.baseCommit);
+    expect(await runGit(hostOrigin, ["rev-parse", "refs/heads/main"])).toBe(
+      await runGit(systemRoot, ["rev-parse", "HEAD"]),
+    );
 
     const lastCommitMessage = await runGit(systemRoot, ["log", "-1", "--pretty=%B"]);
     expect(lastCommitMessage).toContain("delamain: ALS-001 in-dev → in-review [factory-jobs]");
@@ -79,7 +82,7 @@ test("runtime merges clean dispatch edits back into the integration checkout", a
 });
 
 test("runtime refreshes stale host bases onto an intervening main commit before merge-back", async () => {
-  await withWorktreeSandbox("merge-refresh-host", async ({ runtime, systemRoot, itemFile }) => {
+  await withWorktreeSandbox("merge-refresh-host", async ({ runtime, systemRoot, hostOrigin, itemFile }) => {
     const prepared = await runtime.prepareDispatch("ALS-001", itemFile, ENTRY);
     expect(prepared).not.toBeNull();
 
@@ -112,7 +115,54 @@ test("runtime refreshes stale host bases onto an intervening main commit before 
     const hostCommitMessage = await runGit(systemRoot, ["log", "-1", "--pretty=%B"]);
     expect(hostCommitMessage).toContain("delamain: ALS-001 in-dev → in-review [factory-jobs]");
     expect(hostCommitMessage).toContain("Dispatch-Id:");
+    expect(await runGit(hostOrigin, ["rev-parse", "refs/heads/main"])).toBe(
+      await runGit(systemRoot, ["rev-parse", "HEAD"]),
+    );
     expect(existsSync(prepared!.worktreePath)).toBe(false);
+  });
+});
+
+test("runtime absorbs orthogonal host head movement and publishes the merged host commit", async () => {
+  await withWorktreeSandbox("orthogonal-host-move", async ({
+    root,
+    runtime,
+    systemRoot,
+    hostOrigin,
+    itemFile,
+  }) => {
+    const prepared = await runtime.prepareDispatch("ALS-001", itemFile, ENTRY);
+    expect(prepared).not.toBeNull();
+
+    await replaceStatus(prepared!.isolatedItemFile, "in-review");
+    await writeFile(join(systemRoot, "operator-note.txt"), "orthogonal host move\n", "utf-8");
+    await gitCommit(systemRoot, "operator: orthogonal host move");
+
+    const result = await runtime.finalizeDispatch({
+      prepared: prepared!,
+      entry: ENTRY,
+      sessionId: "12121212-1212-4212-8212-121212121212",
+      durationMs: 2_450,
+      numTurns: 4,
+      costUsd: 0.14,
+      success: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.blocked).toBe(false);
+    expect(result.mergeOutcome).toBe("merged");
+    expect(await readFrontmatterStatus(itemFile)).toBe("in-review");
+    expect(await runGit(hostOrigin, ["rev-parse", "refs/heads/main"])).toBe(
+      await runGit(systemRoot, ["rev-parse", "HEAD"]),
+    );
+
+    const freshCloneRoot = join(root, "fresh-host-clone");
+    await runGit(root, ["clone", hostOrigin, freshCloneRoot]);
+    expect(await readFrontmatterStatus(join(freshCloneRoot, "als-factory", "jobs", "ALS-001.md"))).toBe(
+      "in-review",
+    );
+    expect(await readFile(join(freshCloneRoot, "operator-note.txt"), "utf-8")).toBe(
+      "orthogonal host move\n",
+    );
   });
 });
 
@@ -120,6 +170,7 @@ test("runtime mounts declared submodule worktrees and merges dual-repo dispatch 
   await withSubmoduleWorktreeSandbox("submodule-merge", async ({
     runtime,
     systemRoot,
+    hostOrigin,
     itemFile,
     primarySubmoduleRoot,
     submoduleOrigin,
@@ -157,8 +208,11 @@ test("runtime mounts declared submodule worktrees and merges dual-repo dispatch 
     expect(await runGit(systemRoot, ["rev-parse", "HEAD:nfrith-repos/als"])).toBe(
       await runGit(primarySubmoduleRoot, ["rev-parse", "HEAD"]),
     );
-    expect(await runGit(submoduleOrigin, ["rev-parse", `refs/heads/${mounted.branchName}`])).toBe(
+    expect(await runGit(submoduleOrigin, ["rev-parse", "refs/heads/main"])).toBe(
       await runGit(primarySubmoduleRoot, ["rev-parse", "HEAD"]),
+    );
+    expect(await runGit(hostOrigin, ["rev-parse", "refs/heads/main"])).toBe(
+      await runGit(systemRoot, ["rev-parse", "HEAD"]),
     );
     expect(result.mountedSubmodules[0]?.branch_name).toBe(mounted.branchName);
 
@@ -177,7 +231,7 @@ test("fresh clone can initialize a merged submodule dispatch from origin", async
   await withSubmoduleWorktreeSandbox("submodule-fresh-clone", async ({
     root,
     runtime,
-    systemRoot,
+    hostOrigin,
     itemFile,
     submoduleOrigin,
   }) => {
@@ -203,7 +257,7 @@ test("fresh clone can initialize a merged submodule dispatch from origin", async
     expect(result.mergeOutcome).toBe("merged");
 
     const freshCloneRoot = join(root, "fresh-checkout");
-    await runGit(root, ["clone", systemRoot, freshCloneRoot]);
+    await runGit(root, ["clone", hostOrigin, freshCloneRoot]);
     await runGit(freshCloneRoot, ["-c", "protocol.file.allow=always", "submodule", "update", "--init"]);
 
     const freshSubmoduleRoot = join(freshCloneRoot, "nfrith-repos", "als");
@@ -213,9 +267,163 @@ test("fresh clone can initialize a merged submodule dispatch from origin", async
     expect(await runGit(freshCloneRoot, ["rev-parse", "HEAD:nfrith-repos/als"])).toBe(
       await runGit(freshSubmoduleRoot, ["rev-parse", "HEAD"]),
     );
-    expect(await runGit(submoduleOrigin, ["rev-parse", `refs/heads/${mounted.branchName}`])).toBe(
+    expect(await runGit(hostOrigin, ["rev-parse", "refs/heads/main"])).toBe(
+      await runGit(freshCloneRoot, ["rev-parse", "HEAD"]),
+    );
+    expect(await runGit(submoduleOrigin, ["rev-parse", "refs/heads/main"])).toBe(
       await runGit(freshSubmoduleRoot, ["rev-parse", "HEAD"]),
     );
+  });
+});
+
+test("parallel descendant submodule advances preserve ancestry and publish the final gitlink", async () => {
+  await withSubmoduleWorktreeSandbox("submodule-descendant-pair", async ({
+    root,
+    runtime,
+    systemRoot,
+    hostOrigin,
+    itemFile,
+    primarySubmoduleRoot,
+    submoduleOrigin,
+  }) => {
+    const secondItemFile = join(systemRoot, "als-factory", "jobs", "ALS-002.md");
+    await writeJobFixture(secondItemFile, "ALS-002");
+    await gitCommit(systemRoot, "fixture: add ALS-002");
+    await runGit(systemRoot, ["push", "origin", "main"]);
+
+    const firstDispatch = await runtime.prepareDispatch("ALS-001", itemFile, ENTRY);
+    const secondDispatch = await runtime.prepareDispatch("ALS-002", secondItemFile, ENTRY);
+    expect(firstDispatch).not.toBeNull();
+    expect(secondDispatch).not.toBeNull();
+
+    await replaceStatus(firstDispatch!.isolatedItemFile, "in-review");
+    await replaceStatus(secondDispatch!.isolatedItemFile, "in-review");
+    await appendBody(
+      join(firstDispatch!.mountedSubmodules[0]!.worktreePath, "CHANGELOG.md"),
+      "First descendant dispatch note.",
+    );
+    await writeFile(
+      join(secondDispatch!.mountedSubmodules[0]!.worktreePath, "dispatch-b.txt"),
+      "Second descendant dispatch note.\n",
+      "utf-8",
+    );
+
+    const firstResult = await runtime.finalizeDispatch({
+      prepared: firstDispatch!,
+      entry: ENTRY,
+      sessionId: "23232323-2323-4232-8232-232323232323",
+      durationMs: 2_900,
+      numTurns: 5,
+      costUsd: 0.21,
+      success: true,
+    });
+    expect(firstResult.success).toBe(true);
+    expect(firstResult.blocked).toBe(false);
+    const firstIntegratedHead = await runGit(primarySubmoduleRoot, ["rev-parse", "HEAD"]);
+
+    const secondResult = await runtime.finalizeDispatch({
+      prepared: secondDispatch!,
+      entry: ENTRY,
+      sessionId: "34343434-3434-4343-8343-343434343434",
+      durationMs: 3_100,
+      numTurns: 6,
+      costUsd: 0.24,
+      success: true,
+    });
+
+    expect(secondResult.success).toBe(true);
+    expect(secondResult.blocked).toBe(false);
+    expect(secondResult.mergeOutcome).toBe("merged");
+
+    const secondIntegratedHead = await runGit(primarySubmoduleRoot, ["rev-parse", "HEAD"]);
+    const ancestry = await runCommand(
+      ["git", "merge-base", "--is-ancestor", firstIntegratedHead, secondIntegratedHead],
+      { cwd: primarySubmoduleRoot },
+    );
+    expect(ancestry.exitCode).toBe(0);
+    expect(await runGit(systemRoot, ["rev-parse", "HEAD:nfrith-repos/als"])).toBe(secondIntegratedHead);
+    expect(await runGit(submoduleOrigin, ["rev-parse", "refs/heads/main"])).toBe(secondIntegratedHead);
+    expect(await runGit(hostOrigin, ["rev-parse", "refs/heads/main:nfrith-repos/als"])).toBe(
+      secondIntegratedHead,
+    );
+
+    const freshCloneRoot = join(root, "fresh-descendant-clone");
+    await runGit(root, ["clone", hostOrigin, freshCloneRoot]);
+    await runGit(freshCloneRoot, ["-c", "protocol.file.allow=always", "submodule", "update", "--init"]);
+    expect(await readFile(join(freshCloneRoot, "nfrith-repos", "als", "CHANGELOG.md"), "utf-8")).toContain(
+      "First descendant dispatch note.",
+    );
+    expect(await readFile(join(freshCloneRoot, "nfrith-repos", "als", "dispatch-b.txt"), "utf-8")).toBe(
+      "Second descendant dispatch note.\n",
+    );
+  });
+});
+
+test("runtime blocks true conflicting concurrent submodule advances with a cause-specific incident", async () => {
+  await withSubmoduleWorktreeSandbox("submodule-conflict-pair", async ({
+    runtime,
+    bundleRoot,
+    systemRoot,
+    itemFile,
+    primarySubmoduleRoot,
+  }) => {
+    const secondItemFile = join(systemRoot, "als-factory", "jobs", "ALS-002.md");
+    await writeJobFixture(secondItemFile, "ALS-002");
+    await gitCommit(systemRoot, "fixture: add ALS-002");
+    await runGit(systemRoot, ["push", "origin", "main"]);
+
+    const firstDispatch = await runtime.prepareDispatch("ALS-001", itemFile, ENTRY);
+    const secondDispatch = await runtime.prepareDispatch("ALS-002", secondItemFile, ENTRY);
+    expect(firstDispatch).not.toBeNull();
+    expect(secondDispatch).not.toBeNull();
+
+    await replaceStatus(firstDispatch!.isolatedItemFile, "in-review");
+    await replaceStatus(secondDispatch!.isolatedItemFile, "in-review");
+    await writeFile(
+      join(firstDispatch!.mountedSubmodules[0]!.worktreePath, "conflict.txt"),
+      "dispatch-a\n",
+      "utf-8",
+    );
+    await writeFile(
+      join(secondDispatch!.mountedSubmodules[0]!.worktreePath, "conflict.txt"),
+      "dispatch-b\n",
+      "utf-8",
+    );
+
+    const firstResult = await runtime.finalizeDispatch({
+      prepared: firstDispatch!,
+      entry: ENTRY,
+      sessionId: "45454545-4545-4454-8454-454545454545",
+      durationMs: 2_700,
+      numTurns: 5,
+      costUsd: 0.2,
+      success: true,
+    });
+    expect(firstResult.success).toBe(true);
+    expect(firstResult.blocked).toBe(false);
+    const firstIntegratedHead = await runGit(primarySubmoduleRoot, ["rev-parse", "HEAD"]);
+
+    const secondResult = await runtime.finalizeDispatch({
+      prepared: secondDispatch!,
+      entry: ENTRY,
+      sessionId: "56565656-5656-4565-8565-565656565656",
+      durationMs: 2_850,
+      numTurns: 5,
+      costUsd: 0.22,
+      success: true,
+    });
+
+    expect(secondResult.success).toBe(false);
+    expect(secondResult.blocked).toBe(true);
+    expect(secondResult.incidentKind).toBe("submodule_concurrent_advance");
+    expect(await runGit(systemRoot, ["rev-parse", "HEAD:nfrith-repos/als"])).toBe(firstIntegratedHead);
+    expect(await readFrontmatterStatus(secondItemFile)).toBe("in-dev");
+    expect(existsSync(secondDispatch!.worktreePath)).toBe(true);
+    expect(existsSync(secondDispatch!.mountedSubmodules[0]!.worktreePath)).toBe(true);
+
+    const state = await readRuntimeState(bundleRoot);
+    const blocked = state.records.find((record) => record.item_id === "ALS-002");
+    expect(blocked?.incident?.kind).toBe("submodule_concurrent_advance");
   });
 });
 
@@ -331,7 +539,7 @@ test("runtime mechanically reconciles divergent host submodule pointer refresh",
   });
 });
 
-test("runtime blocks submodule dispatch merge-back when pushing the origin branch fails", async () => {
+test("runtime blocks submodule dispatch merge-back when canonical publication fails", async () => {
   await withSubmoduleWorktreeSandbox("submodule-push-failure", async ({
     root,
     runtime,
@@ -369,8 +577,8 @@ test("runtime blocks submodule dispatch merge-back when pushing the origin branc
     expect(result.success).toBe(false);
     expect(result.blocked).toBe(true);
     expect(result.mergeOutcome).toBe("blocked");
-    expect(result.incidentKind).toBe("submodule_push_failed");
-    expect(result.incidentMessage).toContain(`repo 'nfrith-repos/als' push origin ${mounted.branchName}`);
+    expect(result.incidentKind).toBe("merge_back_publish_failed");
+    expect(result.incidentMessage).toContain("repo 'nfrith-repos/als' publish origin/main");
     expect(await runGit(systemRoot, ["rev-parse", "HEAD"])).toBe(hostHeadBefore);
     expect(await runGit(primarySubmoduleRoot, ["rev-parse", "HEAD"])).toBe(submoduleHeadBefore);
     expect(await readFrontmatterStatus(itemFile)).toBe("in-dev");
@@ -379,7 +587,7 @@ test("runtime blocks submodule dispatch merge-back when pushing the origin branc
 
     const state = await readRuntimeState(bundleRoot);
     expect(state.records[0]?.status).toBe("blocked");
-    expect(state.records[0]?.incident?.kind).toBe("submodule_push_failed");
+    expect(state.records[0]?.incident?.kind).toBe("merge_back_publish_failed");
     expect(state.records[0]?.mounted_submodules[0]?.branch_name).toBe(mounted.branchName);
     expect(state.records[0]?.mounted_submodules[0]?.integrated_commit).toBeNull();
   });
@@ -552,11 +760,11 @@ test("runtime reclassifies dirty retry failures when the clean tree reveals a re
     expect(retries).toHaveLength(1);
     expect(retries[0]?.action).toBe("blocked");
     expect(retries[0]?.treeState).toBe("clean");
-    expect(retries[0]?.incidentKind).toBe("stale_base_conflict");
+    expect(retries[0]?.incidentKind).toBe("tracked_path_conflict");
 
     const state = await readRuntimeState(bundleRoot);
     expect(state.records[0]?.status).toBe("blocked");
-    expect(state.records[0]?.incident?.kind).toBe("stale_base_conflict");
+    expect(state.records[0]?.incident?.kind).toBe("tracked_path_conflict");
     expect(state.records[0]?.incident?.retry_count).toBe(0);
     expect(state.records[0]?.base_commit).toBe(await runGit(systemRoot, ["rev-parse", "HEAD"]));
   });
@@ -677,14 +885,14 @@ test("runtime preserves blocked worktrees when stale-base refresh hits a conflic
 
     expect(result.success).toBe(false);
     expect(result.blocked).toBe(true);
-    expect(result.incidentKind).toBe("stale_base_conflict");
+    expect(result.incidentKind).toBe("tracked_path_conflict");
     expect(existsSync(prepared!.worktreePath)).toBe(true);
     expect(await readFrontmatterStatus(itemFile)).toBe("operator-edit");
     expect(prepared!.baseCommit).toBe(operatorHead);
 
     const state = await readRuntimeState(join(systemRoot, "..", ".claude", "delamains", "factory-jobs"));
     expect(state.records[0]?.status).toBe("blocked");
-    expect(state.records[0]?.incident?.kind).toBe("stale_base_conflict");
+    expect(state.records[0]?.incident?.kind).toBe("tracked_path_conflict");
     expect(state.records[0]?.base_commit).toBe(operatorHead);
     expect(state.records[0]?.worktree_commit).not.toBeNull();
   });
@@ -891,6 +1099,7 @@ async function withWorktreeSandbox(
   run: (input: {
     root: string;
     systemRoot: string;
+    hostOrigin: string;
     bundleRoot: string;
     itemFile: string;
     worktreeRoot: string;
@@ -899,6 +1108,7 @@ async function withWorktreeSandbox(
 ): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `als-delamain-worktree-${label}-`));
   const systemRoot = join(root, "system");
+  const hostOrigin = join(root, "system-origin");
   const bundleRoot = join(root, ".claude", "delamains", "factory-jobs");
   const worktreeRoot = join(root, ".worktrees");
   const itemFile = join(systemRoot, "als-factory", "jobs", "ALS-001.md");
@@ -936,6 +1146,10 @@ async function withWorktreeSandbox(
         "fixture: initial commit",
       ],
     );
+    await runGit(root, ["clone", systemRoot, hostOrigin]);
+    await runGit(hostOrigin, ["config", "receive.denyCurrentBranch", "updateInstead"]);
+    await runGit(systemRoot, ["remote", "add", "origin", hostOrigin]);
+    await runGit(systemRoot, ["push", "-u", "origin", "main"]);
 
     const runtime = new DispatcherRuntime({
       bundleRoot,
@@ -949,6 +1163,7 @@ async function withWorktreeSandbox(
     await run({
       root,
       systemRoot,
+      hostOrigin,
       bundleRoot,
       itemFile,
       worktreeRoot,
@@ -964,6 +1179,7 @@ async function withSubmoduleWorktreeSandbox(
   run: (input: {
     root: string;
     systemRoot: string;
+    hostOrigin: string;
     bundleRoot: string;
     itemFile: string;
     worktreeRoot: string;
@@ -974,6 +1190,7 @@ async function withSubmoduleWorktreeSandbox(
 ): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), `als-delamain-submodule-worktree-${label}-`));
   const systemRoot = join(root, "system");
+  const hostOrigin = join(root, "system-origin");
   const bundleRoot = join(root, ".claude", "delamains", "factory-jobs");
   const worktreeRoot = join(root, ".worktrees");
   const submoduleOrigin = join(root, "als-origin");
@@ -1015,6 +1232,7 @@ async function withSubmoduleWorktreeSandbox(
         "fixture: initial submodule commit",
       ],
     );
+    await runGit(submoduleOrigin, ["config", "receive.denyCurrentBranch", "updateInstead"]);
 
     await runGit(systemRoot, ["init"]);
     await runGit(systemRoot, ["branch", "-M", "main"]);
@@ -1022,6 +1240,7 @@ async function withSubmoduleWorktreeSandbox(
       systemRoot,
       ["-c", "protocol.file.allow=always", "submodule", "add", submoduleOrigin, "nfrith-repos/als"],
     );
+    await runGit(primarySubmoduleRoot, ["checkout", "-B", "main", "--track", "origin/main"]);
     await runGit(systemRoot, ["add", "."]);
     await runGit(
       systemRoot,
@@ -1036,6 +1255,10 @@ async function withSubmoduleWorktreeSandbox(
         "fixture: initial commit",
       ],
     );
+    await runGit(root, ["clone", systemRoot, hostOrigin]);
+    await runGit(hostOrigin, ["config", "receive.denyCurrentBranch", "updateInstead"]);
+    await runGit(systemRoot, ["remote", "add", "origin", hostOrigin]);
+    await runGit(systemRoot, ["push", "-u", "origin", "main"]);
 
     const runtime = new DispatcherRuntime({
       bundleRoot,
@@ -1050,6 +1273,7 @@ async function withSubmoduleWorktreeSandbox(
     await run({
       root,
       systemRoot,
+      hostOrigin,
       bundleRoot,
       itemFile,
       worktreeRoot,
@@ -1060,6 +1284,22 @@ async function withSubmoduleWorktreeSandbox(
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+}
+
+async function writeJobFixture(filePath: string, itemId: string, status = "in-dev"): Promise<void> {
+  await writeFile(
+    filePath,
+    [
+      "---",
+      `id: ${itemId}`,
+      `status: ${status}`,
+      "title: Worktree runtime",
+      "---",
+      "",
+      "Dispatcher runtime fixture.",
+    ].join("\n") + "\n",
+    "utf-8",
+  );
 }
 
 async function replaceStatus(filePath: string, status: string): Promise<void> {

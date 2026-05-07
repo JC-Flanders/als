@@ -103,7 +103,7 @@ test("canonical dispatcher bundle matches the current known vendor fingerprint",
   );
 
   expect(fingerprint).toEqual({
-    matched_version: 15,
+    matched_version: 16,
     customized: false,
   });
 });
@@ -167,7 +167,7 @@ test("delamain construct preflight and execute stage the fleet upgrade without m
       "delamain-dispatcher",
       "factory-jobs",
       "VERSION",
-    ), "utf-8")).toBe("15\n");
+    ), "utf-8")).toBe("16\n");
     expect(execute.validation?.requires_claude_deploy).toBe(true);
   });
 });
