@@ -1,12 +1,11 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { diag, reasons } from "./diagnostics.ts";
@@ -24,10 +23,13 @@ interface AuthoredValueIssue {
 const AUTHORED_SOURCE_HINT = "Author ALS entrypoints as synchronous declarative TypeScript data exports.";
 const RESERVED_AUTHORING_SPECIFIER = "als:authoring";
 const RESERVED_CONTRACTS_SPECIFIER = "als:contracts";
-const MATERIALIZED_RUNTIME_DIR = "__als_runtime__";
 const AUTHORING_RUNTIME_PATH = fileURLToPath(new URL("./authoring/index.ts", import.meta.url));
 const CONTRACTS_RUNTIME_PATH = fileURLToPath(new URL("./contracts.ts", import.meta.url));
+const MATERIALIZED_LOAD_ROOT = join(tmpdir(), `als-authored-load-${process.pid}-${randomUUID()}`);
+const MATERIALIZED_INSTANCE_ROOT = join(MATERIALIZED_LOAD_ROOT, "instances");
 const transpiler = new Bun.Transpiler();
+const materializedAuthoredRoots = new Map<string, string>();
+let materializedLoadRootInitialized = false;
 
 const LEGACY_AUTHORING_IMPORT_PATHS = {
   system: "./authoring.ts",
@@ -131,7 +133,6 @@ export function loadAuthoredSourceExport(
 interface MaterializedAuthoredSource {
   success: true;
   entry_path: string;
-  temp_root: string;
 }
 
 type MaterializedAuthoredSourceResult =
@@ -216,35 +217,23 @@ function materializeAuthoredSource(
     };
   }
 
-  const tempRoot = mkdtempSync(join(tmpdir(), `als-authored-load-${randomUUID()}-`));
-  const tempAlsRoot = join(tempRoot, ".als");
-  const materializedEntryPath = join(tempAlsRoot, inferTempAuthoredEntryPath(fileAbs));
-  const materializedRuntimeRoot = join(tempAlsRoot, MATERIALIZED_RUNTIME_DIR);
-  const materializedRuntimeAuthoringPath = join(materializedRuntimeRoot, "authoring.js");
-  const materializedRuntimeContractsPath = join(materializedRuntimeRoot, "contracts.js");
+  const materializedRoot = resolveMaterializedAuthoredRoot(fileAbs);
+  const materializedEntryPath = join(
+    materializedRoot,
+    inferMaterializedEntryRelativePath(fileAbs),
+  );
 
   mkdirSync(dirname(materializedEntryPath), { recursive: true });
-  mkdirSync(materializedRuntimeRoot, { recursive: true });
   writeFileSync(
-    join(tempAlsRoot, "authoring.ts"),
+    join(materializedRoot, "authoring.ts"),
     createLegacyAuthoringShim(),
     "utf-8",
   );
   writeFileSync(
-    materializedRuntimeAuthoringPath,
-    `export * from ${JSON.stringify(AUTHORING_RUNTIME_PATH)};\n`,
-    "utf-8",
-  );
-  writeFileSync(
-    materializedRuntimeContractsPath,
-    `export * from ${JSON.stringify(CONTRACTS_RUNTIME_PATH)};\n`,
-    "utf-8",
-  );
-  writeFileSync(
     materializedEntryPath,
-    rewriteReservedImportSpecifiers(transformedSource, materializedEntryPath, {
-      [RESERVED_AUTHORING_SPECIFIER]: materializedRuntimeAuthoringPath,
-      [RESERVED_CONTRACTS_SPECIFIER]: materializedRuntimeContractsPath,
+    rewriteReservedImportSpecifiers(transformedSource, {
+      [RESERVED_AUTHORING_SPECIFIER]: AUTHORING_RUNTIME_PATH,
+      [RESERVED_CONTRACTS_SPECIFIER]: CONTRACTS_RUNTIME_PATH,
     }),
     "utf-8",
   );
@@ -252,7 +241,6 @@ function materializeAuthoredSource(
   return {
     success: true,
     entry_path: materializedEntryPath,
-    temp_root: tempRoot,
   };
 }
 
@@ -262,15 +250,12 @@ function cleanupMaterializedSource(source: MaterializedAuthoredSourceResult): vo
   }
 
   const requireFn = require as NodeJS.Require;
-  const cache = requireFn.cache ?? {};
-  const tempRootPrefix = `${source.temp_root}${sep}`;
-  for (const cacheKey of Object.keys(cache)) {
-    if (cacheKey === source.temp_root || cacheKey.startsWith(tempRootPrefix)) {
-      delete cache[cacheKey];
-    }
+  try {
+    const resolvedPath = requireFn.resolve(source.entry_path);
+    delete requireFn.cache?.[resolvedPath];
+  } catch {
+    // Ignore cache cleanup when the module was never resolved successfully.
   }
-
-  rmSync(source.temp_root, { recursive: true, force: true });
 }
 
 function createLegacyAuthoringShim(): string {
@@ -290,7 +275,42 @@ function createLegacyAuthoringShim(): string {
   ].join("\n");
 }
 
-function inferTempAuthoredEntryPath(fileAbs: string): string {
+function resolveMaterializedAuthoredRoot(fileAbs: string): string {
+  const normalizedFileAbs = resolve(fileAbs);
+  const authoredRootMarker = `${sep}.als${sep}`;
+  const authoredRootIndex = normalizedFileAbs.lastIndexOf(authoredRootMarker);
+  const authoredRootAbs = authoredRootIndex === -1
+    ? dirname(normalizedFileAbs)
+    : normalizedFileAbs.slice(0, authoredRootIndex + authoredRootMarker.length - 1);
+  const cached = materializedAuthoredRoots.get(authoredRootAbs);
+  if (cached) {
+    return cached;
+  }
+
+  initializeMaterializedLoadRoot();
+  const namespacedRoot = join(MATERIALIZED_INSTANCE_ROOT, hashMaterializedRoot(authoredRootAbs), ".als");
+  mkdirSync(namespacedRoot, { recursive: true });
+  materializedAuthoredRoots.set(authoredRootAbs, namespacedRoot);
+  return namespacedRoot;
+}
+
+function initializeMaterializedLoadRoot(): void {
+  if (materializedLoadRootInitialized) {
+    return;
+  }
+
+  mkdirSync(MATERIALIZED_INSTANCE_ROOT, { recursive: true });
+  process.once("exit", () => {
+    rmSync(MATERIALIZED_LOAD_ROOT, { recursive: true, force: true });
+  });
+  materializedLoadRootInitialized = true;
+}
+
+function hashMaterializedRoot(value: string): string {
+  return createHash("sha1").update(value).digest("hex");
+}
+
+function inferMaterializedEntryRelativePath(fileAbs: string): string {
   const normalizedFileAbs = resolve(fileAbs);
   const authoredRootMarker = `${sep}.als${sep}`;
   const authoredRootIndex = normalizedFileAbs.lastIndexOf(authoredRootMarker);
@@ -304,23 +324,16 @@ function inferTempAuthoredEntryPath(fileAbs: string): string {
 
 function rewriteReservedImportSpecifiers(
   source: string,
-  materializedEntryPath: string,
   importTargets: Record<string, string>,
 ): string {
   let rewritten = source;
   for (const [specifier, targetPath] of Object.entries(importTargets)) {
-    const relativeImportPath = toImportSpecifier(dirname(materializedEntryPath), targetPath);
     rewritten = rewritten
-      .replaceAll(`"${specifier}"`, JSON.stringify(relativeImportPath))
-      .replaceAll(`'${specifier}'`, JSON.stringify(relativeImportPath));
+      .replaceAll(`"${specifier}"`, JSON.stringify(targetPath))
+      .replaceAll(`'${specifier}'`, JSON.stringify(targetPath));
   }
 
   return rewritten;
-}
-
-function toImportSpecifier(fromDir: string, targetPath: string): string {
-  const relativePath = relative(fromDir, targetPath).replaceAll(sep, "/");
-  return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
 }
 
 function pickAuthoredExport(loadedModule: unknown, exportName: AuthoredExportName): unknown {
