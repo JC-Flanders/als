@@ -16,11 +16,11 @@ import { readLanguageUpgradeRuntimeState } from "../src/runtime-state.ts";
 import { verifyLanguageUpgradeRecipe } from "../src/verify.ts";
 
 const alsRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-const authoringRuntimePath = resolve(alsRepoRoot, "alsc/compiler/src/authoring/index.ts");
-const contractsRuntimePath = resolve(alsRepoRoot, "alsc/compiler/src/contracts.ts");
 const v1FixtureRoot = resolve(alsRepoRoot, "language-upgrades/fixtures/v1");
 const v2FixtureRoot = resolve(alsRepoRoot, "language-upgrades/fixtures/v2");
+const v3FixtureRoot = resolve(alsRepoRoot, "language-upgrades/fixtures/v3");
 const v1ToV2RecipeRoot = resolve(alsRepoRoot, "language-upgrades/recipes/v1-to-v2");
+const v2ToV3RecipeRoot = resolve(alsRepoRoot, "language-upgrades/recipes/v2-to-v3");
 
 interface UpgradeHarness {
   root: string;
@@ -588,6 +588,49 @@ test("shipped v1-to-v2 recipe verifies against the frozen fixtures", async () =>
   }
 });
 
+test("shipped v2-to-v3 recipe verifies against the frozen fixtures", async () => {
+  const inspection = inspectLanguageUpgradeRecipe(v2ToV3RecipeRoot);
+  expect(inspection.status).toBe("pass");
+  if (inspection.status !== "pass" || !inspection.recipe) {
+    return;
+  }
+
+  const workingRoot = await mkdtemp(join(tmpdir(), "als-upgrade-language-v2-to-v3-fixture-"));
+  const fromFixtureRoot = join(workingRoot, "from");
+  const expectedFixtureRoot = join(workingRoot, "expected");
+
+  try {
+    await prepareRunnableFixture(v2FixtureRoot, fromFixtureRoot);
+    await prepareRunnableFixture(v3FixtureRoot, expectedFixtureRoot);
+
+    const verification = await verifyLanguageUpgradeRecipe({
+      from_fixture_path: fromFixtureRoot,
+      expected_fixture_path: expectedFixtureRoot,
+      hop: {
+        hop_id: "v2-to-v3",
+        recipe: inspection.recipe,
+        recipe_path: inspection.recipe_path,
+        bundle_root: inspection.bundle_root,
+      },
+      services: {
+        inspect_system(systemRoot) {
+          const validation = validateSystem(systemRoot);
+          return {
+            als_version: validation.als_version,
+            status: validation.status,
+          };
+        },
+      },
+    });
+
+    expect(verification.status).toBe("pass");
+    expect(verification.mismatches).toEqual([]);
+    expect(verification.step_results.map((step) => step.status)).toEqual(["completed"]);
+  } finally {
+    await rm(workingRoot, { recursive: true, force: true });
+  }
+});
+
 async function writeFixtureFiles(root: string, files: Record<string, string>): Promise<void> {
   for (const [relativePath, contents] of Object.entries(files)) {
     const filePath = join(root, relativePath);
@@ -598,24 +641,6 @@ async function writeFixtureFiles(root: string, files: Record<string, string>): P
 
 async function prepareRunnableFixture(sourceRoot: string, targetRoot: string): Promise<void> {
   await cp(sourceRoot, targetRoot, { recursive: true });
-  await writeFile(
-    join(targetRoot, ".als", "authoring.ts"),
-    [
-      `export { defineSystem, defineModule, defineDelamain } from ${JSON.stringify(authoringRuntimePath)};`,
-      "export {",
-      "  COMPATIBILITY_CLASSES,",
-      "  COMPATIBILITY_CLASS_METADATA,",
-      "  COMPATIBILITY_CLASS_RELEASE_HEADLINE_ORDER,",
-      "  compareCompatibilityClassesByPrecedence,",
-      "  highestCompatibilityClass,",
-      "  isCompatibilityClass,",
-      "  sortCompatibilityClassesByPrecedence,",
-      "  type CompatibilityClass,",
-      `} from ${JSON.stringify(contractsRuntimePath)};`,
-      "",
-    ].join("\n"),
-    "utf-8",
-  );
 }
 
 function initializeGitRepository(root: string): void {

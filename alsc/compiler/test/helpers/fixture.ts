@@ -12,9 +12,6 @@ import { validateSystem } from "../../src/validate.ts";
 const fixtureRoot = fileURLToPath(
   new URL("../../../../reference-system/", import.meta.url),
 );
-const compilerAuthoringPath = fileURLToPath(
-  new URL("../../src/authoring/index.ts", import.meta.url),
-);
 
 export interface FixtureSandbox {
   root: string;
@@ -25,10 +22,6 @@ async function createFixtureSandbox(label = "fixture", sourceRoot = fixtureRoot)
   const root = join(tmpdir(), `als-compiler-${safeLabel}-${randomUUID()}`);
   await mkdir(root, { recursive: false });
   copyFixtureTree(sourceRoot, root);
-  await writeFile(
-    join(root, ".als/authoring.ts"),
-    `export { defineSystem, defineModule, defineDelamain } from ${JSON.stringify(compilerAuthoringPath)};\n`,
-  );
   return { root };
 }
 
@@ -40,7 +33,15 @@ export async function withFixtureSandbox(
   label: string,
   run: (sandbox: FixtureSandbox) => Promise<void> | void,
 ): Promise<void> {
-  const sandbox = await createFixtureSandbox(label);
+  await withFixtureSandboxFromSource(label, fixtureRoot, run);
+}
+
+export async function withFixtureSandboxFromSource(
+  label: string,
+  sourceRoot: string,
+  run: (sandbox: FixtureSandbox) => Promise<void> | void,
+): Promise<void> {
+  const sandbox = await createFixtureSandbox(label, sourceRoot);
   let runError: unknown = null;
 
   try {
@@ -313,13 +314,7 @@ function serializeAuthoredDefinition(
       ? "defineModule"
       : "defineDelamain";
 
-  const importPath = exportName === "system"
-    ? "./authoring.ts"
-    : exportName === "module"
-      ? "../../../authoring.ts"
-      : "../../../../../authoring.ts";
-
-  return `import { ${helperName} } from ${JSON.stringify(importPath)};\n\nexport const ${exportName} = ${helperName}(${JSON.stringify(value, null, 2)} as const);\n\nexport default ${exportName};\n`;
+  return `import { ${helperName} } from "als:authoring";\n\nexport const ${exportName} = ${helperName}(${JSON.stringify(value, null, 2)} as const);\n\nexport default ${exportName};\n`;
 }
 
 function describeSearch(code: string, fileSuffix?: string): string {

@@ -1,6 +1,6 @@
 ---
 name: install
-description: Bootstrap ALS into a fresh project — author the empty skeleton (`.als/authoring.ts`, `.als/system.ts` with an empty `modules: {}`), validate and deploy it, create the operator profile if missing, then hand off to `/foundry` or `/new` for module work. Use this when the operator is starting from zero on a non-ALS project.
+description: Bootstrap ALS into a fresh project — author the empty skeleton (`.als/system.ts` with an empty `modules: {}`), validate and deploy it, create the operator profile if missing, then hand off to `/foundry` or `/new` for module work. Use this when the operator is starting from zero on a non-ALS project.
 allowed-tools: AskUserQuestion, Bash(bash *), Read, Write, Edit, Skill
 ---
 
@@ -95,8 +95,7 @@ Do not interview for modules, entities, skills, or delamains here. Those belong 
 With `system_id` chosen, write the authored skeleton. Follow `references/bootstrap-templates.md` for exact contents.
 
 1. Create `.als/` and `.als/modules/` (the latter an empty directory).
-2. Write `.als/authoring.ts`. Resolve the compiler import path from `${CLAUDE_PLUGIN_ROOT}/alsc/compiler/src/authoring/index.ts`.
-3. Write `.als/system.ts` with `als_version: 1`, the chosen `system_id`, and an empty `modules: {}` block.
+2. Write `.als/system.ts` with `als_version: 3`, the chosen `system_id`, and an empty `modules: {}` block.
 
 Do not author any modules, skills, or delamains. Those arrive via `/new` or `/foundry` in Phase 9.
 

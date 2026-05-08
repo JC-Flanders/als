@@ -461,7 +461,7 @@ Rules:
 Authored Delamain definitions live in `delamain.ts` and are referenced from the module registry.
 
 ```ts
-import { defineDelamain } from "../../../../../authoring.ts";
+import { defineDelamain } from "als:authoring";
 
 export const delamain = defineDelamain({
   phases: ["intake", "implementation", "closed"],
@@ -507,7 +507,6 @@ Required authored layout:
 ```text
 .als/
   system.ts
-  authoring.ts
   modules/
     backlog/
       v1/
@@ -539,7 +538,7 @@ Authored Delamains are TypeScript, but Claude deploy still writes a runtime `del
 ### system.ts Detailed Rules
 
 - `als_version` is required and must be a positive integer.
-- ALS v1 currently supports `als_version: 1` only.
+- ALS currently supports `als_version` values 1, 2, and 3.
 - ALS language-version upgrades remain whole-system cutovers. Mixed authored ALS versions inside one system are not part of the v1 contract.
 - `system_id` is required and must be a non-empty string.
 - Module ids must match `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`.

@@ -77,6 +77,7 @@ export const reasons = {
   AUTHORED_SOURCE_READ_FAILED: "authored_source.read_failed",
   AUTHORED_SOURCE_LOAD_FAILED: "authored_source.load_failed",
   AUTHORED_SOURCE_EXPORT_MISSING: "authored_source.export_missing",
+  AUTHORED_SOURCE_IMPORT_UNSUPPORTED: "authored_source.import_unsupported",
   AUTHORED_SOURCE_VALUE_UNSUPPORTED: "authored_source.value_unsupported",
   SYSTEM_ALS_VERSION_INVALID: "system.als_version.invalid",
   SYSTEM_ALS_VERSION_UNSUPPORTED: "system.als_version.unsupported",

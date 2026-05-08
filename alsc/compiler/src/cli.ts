@@ -13,6 +13,7 @@ import {
   inspectOperatorConfigFile,
   resolveOperatorConfigPath,
 } from "./operator-config.ts";
+import { resolveOwningModuleForPath } from "./module-owner.ts";
 import { validateSystem } from "./validate.ts";
 
 const MAIN_USAGE = `Usage:
@@ -22,6 +23,7 @@ const MAIN_USAGE = `Usage:
   alsc construct inspect <construct-path>
   alsc construct inspect-action <action-manifest-path>
   alsc changelog inspect [als-repo-or-changelog-path]
+  alsc system module-owner <system-root> <file-path>
   alsc operator-config path [system-root-or-cwd]
   alsc operator-config inspect [system-root-or-cwd-or-operator-config-path]
   alsc operator-config session-start [cwd]
@@ -32,6 +34,7 @@ Commands:
   upgrade-recipe  Inspect language-upgrade-recipe bundles.
   construct       Inspect construct manifests and staged action manifests.
   changelog       Inspect ALS CHANGELOG.md structure and staged release entries.
+  system          Resolve compiler-owned ALS system metadata.
   operator-config Inspect the operator config or render SessionStart output.
 `;
 
@@ -42,6 +45,7 @@ const CONSTRUCT_USAGE = `Usage:
   alsc construct inspect <construct-path>
   alsc construct inspect-action <action-manifest-path>`;
 const CHANGELOG_USAGE = "Usage: alsc changelog inspect [als-repo-or-changelog-path]";
+const SYSTEM_USAGE = "Usage: alsc system module-owner <system-root> <file-path>";
 const OPERATOR_CONFIG_USAGE = `Usage:
   alsc operator-config path [system-root-or-cwd]
   alsc operator-config inspect [system-root-or-cwd-or-operator-config-path]
@@ -86,6 +90,10 @@ export function runCli(
 
   if (command === "changelog") {
     return runChangelogCommand(rest, io);
+  }
+
+  if (command === "system") {
+    return runSystemCommand(rest, io);
   }
 
   if (command === "operator-config") {
@@ -184,6 +192,29 @@ function runChangelogCommand(args: string[], io: CliIo): number {
   const inspection = inspectChangelogFile(rest[0] ?? process.cwd());
   writeStdout(io, JSON.stringify(inspection, null, 2));
   return inspection.status === "pass" ? 0 : 1;
+}
+
+function runSystemCommand(args: string[], io: CliIo): number {
+  if (args.length === 0 || (args.length === 1 && isHelpFlag(args[0]))) {
+    writeStdout(io, `${SYSTEM_USAGE}\n`);
+    return args.length === 0 ? 2 : 0;
+  }
+
+  const [subcommand, ...rest] = args;
+  if (subcommand !== "module-owner" || rest.length !== 2) {
+    writeStderr(io, `${SYSTEM_USAGE}\n`);
+    return 2;
+  }
+
+  const [systemRoot, filePath] = rest;
+  const resolution = resolveOwningModuleForPath(resolve(systemRoot), filePath);
+  if (resolution.status === "invalid-system") {
+    writeStderr(io, `${resolution.diagnostic ?? "Could not load ALS system metadata."}\n`);
+    return 1;
+  }
+
+  writeStdout(io, resolution.module_id ?? "");
+  return 0;
 }
 
 function runDeployCommand(args: string[], io: CliIo): number {

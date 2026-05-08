@@ -1,4 +1,14 @@
-import { readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { diag, reasons } from "./diagnostics.ts";
 import { toRepoRelative } from "./system-paths.ts";
 import type { CompilerDiagnostic } from "./types.ts";
@@ -12,6 +22,18 @@ interface AuthoredValueIssue {
 }
 
 const AUTHORED_SOURCE_HINT = "Author ALS entrypoints as synchronous declarative TypeScript data exports.";
+const RESERVED_AUTHORING_SPECIFIER = "als:authoring";
+const RESERVED_CONTRACTS_SPECIFIER = "als:contracts";
+const MATERIALIZED_RUNTIME_DIR = "__als_runtime__";
+const AUTHORING_RUNTIME_PATH = fileURLToPath(new URL("./authoring/index.ts", import.meta.url));
+const CONTRACTS_RUNTIME_PATH = fileURLToPath(new URL("./contracts.ts", import.meta.url));
+const transpiler = new Bun.Transpiler();
+
+const LEGACY_AUTHORING_IMPORT_PATHS = {
+  system: "./authoring.ts",
+  module: "../../../authoring.ts",
+  delamain: "../../../../../authoring.ts",
+} as const satisfies Record<AuthoredExportName, string>;
 
 export function loadAuthoredSourceExport(
   fileAbs: string,
@@ -39,10 +61,15 @@ export function loadAuthoredSourceExport(
     };
   }
 
+  const materializedSource = materializeAuthoredSource(fileAbs, fileRel, exportName, phase, code, moduleId);
+  if (!materializedSource.success) {
+    return materializedSource;
+  }
+
   let loadedModule: unknown;
   try {
     const requireFn = require as NodeJS.Require;
-    const resolvedPath = requireFn.resolve(fileAbs);
+    const resolvedPath = requireFn.resolve(materializedSource.entry_path);
     // ALS authored entrypoints are loaded once per validation/projection pass.
     // Clearing the direct module cache keeps same-file edits visible, but we do
     // not attempt to invalidate transitive imports beyond that single-shot use.
@@ -61,6 +88,8 @@ export function loadAuthoredSourceExport(
         }),
       ],
     };
+  } finally {
+    cleanupMaterializedSource(materializedSource);
   }
 
   const candidate = pickAuthoredExport(loadedModule, exportName);
@@ -97,6 +126,201 @@ export function loadAuthoredSourceExport(
   }
 
   return { success: true, data: candidate };
+}
+
+interface MaterializedAuthoredSource {
+  success: true;
+  entry_path: string;
+  temp_root: string;
+}
+
+type MaterializedAuthoredSourceResult =
+  | MaterializedAuthoredSource
+  | { success: false; diagnostics: CompilerDiagnostic[] };
+
+function materializeAuthoredSource(
+  fileAbs: string,
+  fileRel: string,
+  exportName: AuthoredExportName,
+  phase: AuthoredSourcePhase,
+  code: string,
+  moduleId: string | null,
+): MaterializedAuthoredSourceResult {
+  const source = readFileSync(fileAbs, "utf-8");
+
+  let transformedSource: string;
+  try {
+    transformedSource = transpiler.transformSync(source, "ts");
+  } catch (error) {
+    return {
+      success: false,
+      diagnostics: [
+        diag(code, "error", phase, fileRel, "Could not evaluate TypeScript entrypoint", {
+          module_id: moduleId ?? undefined,
+          reason: reasons.AUTHORED_SOURCE_LOAD_FAILED,
+          expected: `valid TypeScript module exporting '${exportName}'`,
+          actual: error instanceof Error ? error.message : String(error),
+          hint: AUTHORED_SOURCE_HINT,
+        }),
+      ],
+    };
+  }
+
+  let scannedImports: Array<{ kind?: string; path?: string }> = [];
+  try {
+    scannedImports = transpiler.scanImports(transformedSource) as Array<{ kind?: string; path?: string }>;
+  } catch (error) {
+    return {
+      success: false,
+      diagnostics: [
+        diag(code, "error", phase, fileRel, "Could not evaluate TypeScript entrypoint", {
+          module_id: moduleId ?? undefined,
+          reason: reasons.AUTHORED_SOURCE_LOAD_FAILED,
+          expected: `valid TypeScript module exporting '${exportName}'`,
+          actual: error instanceof Error ? error.message : String(error),
+          hint: AUTHORED_SOURCE_HINT,
+        }),
+      ],
+    };
+  }
+
+  const expectedLegacyImport = LEGACY_AUTHORING_IMPORT_PATHS[exportName];
+  const unsupportedImportDiagnostics = scannedImports
+    .filter((entry) => entry.kind === "import-statement" && typeof entry.path === "string")
+    .map((entry) => entry.path as string)
+    .filter((importPath) =>
+      importPath !== RESERVED_AUTHORING_SPECIFIER
+      && importPath !== RESERVED_CONTRACTS_SPECIFIER
+      && importPath !== expectedLegacyImport,
+    )
+    .map((importPath) =>
+      diag(
+        code,
+        "error",
+        phase,
+        fileRel,
+        "Authored ALS entrypoints may only import value symbols from ALS authoring surfaces.",
+        {
+          module_id: moduleId ?? undefined,
+          reason: reasons.AUTHORED_SOURCE_IMPORT_UNSUPPORTED,
+          expected: [expectedLegacyImport, RESERVED_AUTHORING_SPECIFIER, RESERVED_CONTRACTS_SPECIFIER],
+          actual: importPath,
+          hint: `Import authoring helpers from '${RESERVED_AUTHORING_SPECIFIER}' and runtime contracts from '${RESERVED_CONTRACTS_SPECIFIER}'.`,
+        },
+      ),
+    );
+  if (unsupportedImportDiagnostics.length > 0) {
+    return {
+      success: false,
+      diagnostics: unsupportedImportDiagnostics,
+    };
+  }
+
+  const tempRoot = mkdtempSync(join(tmpdir(), `als-authored-load-${randomUUID()}-`));
+  const tempAlsRoot = join(tempRoot, ".als");
+  const materializedEntryPath = join(tempAlsRoot, inferTempAuthoredEntryPath(fileAbs));
+  const materializedRuntimeRoot = join(tempAlsRoot, MATERIALIZED_RUNTIME_DIR);
+  const materializedRuntimeAuthoringPath = join(materializedRuntimeRoot, "authoring.js");
+  const materializedRuntimeContractsPath = join(materializedRuntimeRoot, "contracts.js");
+
+  mkdirSync(dirname(materializedEntryPath), { recursive: true });
+  mkdirSync(materializedRuntimeRoot, { recursive: true });
+  writeFileSync(
+    join(tempAlsRoot, "authoring.ts"),
+    createLegacyAuthoringShim(),
+    "utf-8",
+  );
+  writeFileSync(
+    materializedRuntimeAuthoringPath,
+    `export * from ${JSON.stringify(AUTHORING_RUNTIME_PATH)};\n`,
+    "utf-8",
+  );
+  writeFileSync(
+    materializedRuntimeContractsPath,
+    `export * from ${JSON.stringify(CONTRACTS_RUNTIME_PATH)};\n`,
+    "utf-8",
+  );
+  writeFileSync(
+    materializedEntryPath,
+    rewriteReservedImportSpecifiers(transformedSource, materializedEntryPath, {
+      [RESERVED_AUTHORING_SPECIFIER]: materializedRuntimeAuthoringPath,
+      [RESERVED_CONTRACTS_SPECIFIER]: materializedRuntimeContractsPath,
+    }),
+    "utf-8",
+  );
+
+  return {
+    success: true,
+    entry_path: materializedEntryPath,
+    temp_root: tempRoot,
+  };
+}
+
+function cleanupMaterializedSource(source: MaterializedAuthoredSourceResult): void {
+  if (!source.success) {
+    return;
+  }
+
+  const requireFn = require as NodeJS.Require;
+  const cache = requireFn.cache ?? {};
+  const tempRootPrefix = `${source.temp_root}${sep}`;
+  for (const cacheKey of Object.keys(cache)) {
+    if (cacheKey === source.temp_root || cacheKey.startsWith(tempRootPrefix)) {
+      delete cache[cacheKey];
+    }
+  }
+
+  rmSync(source.temp_root, { recursive: true, force: true });
+}
+
+function createLegacyAuthoringShim(): string {
+  return [
+    `export { defineSystem, defineModule, defineDelamain } from ${JSON.stringify(AUTHORING_RUNTIME_PATH)};`,
+    "export {",
+    "  COMPATIBILITY_CLASSES,",
+    "  COMPATIBILITY_CLASS_METADATA,",
+    "  COMPATIBILITY_CLASS_RELEASE_HEADLINE_ORDER,",
+    "  compareCompatibilityClassesByPrecedence,",
+    "  highestCompatibilityClass,",
+    "  isCompatibilityClass,",
+    "  sortCompatibilityClassesByPrecedence,",
+    "  type CompatibilityClass,",
+    `} from ${JSON.stringify(CONTRACTS_RUNTIME_PATH)};`,
+    "",
+  ].join("\n");
+}
+
+function inferTempAuthoredEntryPath(fileAbs: string): string {
+  const normalizedFileAbs = resolve(fileAbs);
+  const authoredRootMarker = `${sep}.als${sep}`;
+  const authoredRootIndex = normalizedFileAbs.lastIndexOf(authoredRootMarker);
+  if (authoredRootIndex === -1) {
+    return fileAbs.replace(/\.ts$/, ".js").split(sep).pop() ?? "entry.js";
+  }
+
+  const relativeWithinAls = normalizedFileAbs.slice(authoredRootIndex + authoredRootMarker.length);
+  return relativeWithinAls.replace(/\.ts$/, ".js");
+}
+
+function rewriteReservedImportSpecifiers(
+  source: string,
+  materializedEntryPath: string,
+  importTargets: Record<string, string>,
+): string {
+  let rewritten = source;
+  for (const [specifier, targetPath] of Object.entries(importTargets)) {
+    const relativeImportPath = toImportSpecifier(dirname(materializedEntryPath), targetPath);
+    rewritten = rewritten
+      .replaceAll(`"${specifier}"`, JSON.stringify(relativeImportPath))
+      .replaceAll(`'${specifier}'`, JSON.stringify(relativeImportPath));
+  }
+
+  return rewritten;
+}
+
+function toImportSpecifier(fromDir: string, targetPath: string): string {
+  const relativePath = relative(fromDir, targetPath).replaceAll(sep, "/");
+  return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
 }
 
 function pickAuthoredExport(loadedModule: unknown, exportName: AuthoredExportName): unknown {

@@ -696,6 +696,5 @@ function serializeAuthoredDefinition(
   value: Record<string, unknown>,
 ): string {
   const helperName = exportName === "module" ? "defineModule" : "defineDelamain";
-  const importPath = exportName === "module" ? "../../../authoring.ts" : "../../../../../authoring.ts";
-  return `import { ${helperName} } from ${JSON.stringify(importPath)};\n\nexport const ${exportName} = ${helperName}(${JSON.stringify(value, null, 2)} as const);\n\nexport default ${exportName};\n`;
+  return `import { ${helperName} } from "als:authoring";\n\nexport const ${exportName} = ${helperName}(${JSON.stringify(value, null, 2)} as const);\n\nexport default ${exportName};\n`;
 }

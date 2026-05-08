@@ -38,6 +38,28 @@ test("loadAuthoredSourceExport accepts default-only authored exports", async () 
   );
 });
 
+test("loadAuthoredSourceExport accepts ALS-reserved authoring imports outside the plugin tree", async () => {
+  await withAuthoredSourceFile(
+    "reserved-imports",
+    `import { defineModule } from "als:authoring";\nimport { COMPATIBILITY_CLASSES } from "als:contracts";\n\nexport const module = defineModule({\n  values: [...COMPATIBILITY_CLASSES]\n} as const);\n`,
+    (filePath) => {
+      const result = loadAuthoredSourceExport(filePath, "module", "module_shape", codes.SHAPE_INVALID, "backlog");
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toEqual({
+          values: [
+            "docs_only",
+            "refresh_required",
+            "additive",
+            "migration_required",
+            "breaking_without_path",
+          ],
+        });
+      }
+    },
+  );
+});
+
 test("loadAuthoredSourceExport reports missing named and default exports", async () => {
   await withAuthoredSourceFile(
     "missing-export",
@@ -50,6 +72,23 @@ test("loadAuthoredSourceExport reports missing named and default exports", async
         expect(result.diagnostics[0]?.reason).toBe(reasons.AUTHORED_SOURCE_EXPORT_MISSING);
         expect(result.diagnostics[0]?.message).toContain("must export 'module' or a default export");
         expect(result.diagnostics[0]?.actual).toEqual(["wrong"]);
+      }
+    },
+  );
+});
+
+test("loadAuthoredSourceExport rejects value imports outside ALS authoring surfaces", async () => {
+  await withAuthoredSourceFile(
+    "unsupported-import",
+    `import { join } from "node:path";\n\nexport const module = { value: join("a", "b") };\n`,
+    (filePath) => {
+      const result = loadAuthoredSourceExport(filePath, "module", "module_shape", codes.SHAPE_INVALID, "backlog");
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.reason).toBe(reasons.AUTHORED_SOURCE_IMPORT_UNSUPPORTED);
+        expect(result.diagnostics[0]?.message).toContain("may only import value symbols");
+        expect(result.diagnostics[0]?.actual).toBe("node:path");
       }
     },
   );

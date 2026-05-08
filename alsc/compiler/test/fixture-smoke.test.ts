@@ -2,9 +2,16 @@ import { expect, test } from "bun:test";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { VALIDATION_OUTPUT_SCHEMA_LITERAL } from "../src/contracts.ts";
-import { updateRecord, updateShapeYaml, validateFixture, withFixtureSandbox } from "./helpers/fixture.ts";
+import {
+  updateRecord,
+  updateShapeYaml,
+  validateFixture,
+  withFixtureSandbox,
+  withFixtureSandboxFromSource,
+} from "./helpers/fixture.ts";
 
 const compilerRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const v2FixtureRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../language-upgrades/fixtures/v2");
 
 test.concurrent("merged reference fixture validates clean", async () => {
   await withFixtureSandbox("fixture-smoke", async ({ root }) => {
@@ -48,14 +55,26 @@ test.concurrent("merged reference fixture validates clean", async () => {
     }
 
     expect(result.schema).toBe(VALIDATION_OUTPUT_SCHEMA_LITERAL);
-    expect(result.als_version).toBe(2);
+    expect(result.als_version).toBe(3);
     expect(result.compiler_contract.supported_als_versions).toContain(1);
     expect(result.compiler_contract.supported_als_versions).toContain(2);
+    expect(result.compiler_contract.supported_als_versions).toContain(3);
     expect(result.status).toBe("pass");
     expect(result.module_filter).toBeNull();
     expect(result.summary.error_count).toBe(0);
     expect(result.summary.files_ignored).toBe(baseline.summary.files_ignored);
     expect(result.summary.modules_checked).toBe(18);
+  });
+});
+
+test.concurrent("legacy v2 fixtures validate clean from an external root without authoring rewrites", async () => {
+  await withFixtureSandboxFromSource("fixture-legacy-v2-external-root", v2FixtureRoot, async ({ root }) => {
+    const result = validateFixture(root);
+
+    expect(result.status).toBe("pass");
+    expect(result.als_version).toBe(2);
+    expect(result.summary.error_count).toBe(0);
+    expect(result.modules).toHaveLength(18);
   });
 });
 

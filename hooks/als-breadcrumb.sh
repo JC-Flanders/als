@@ -42,27 +42,10 @@ fi
 rel_path="${file_path#"$system_root"/}"
 [[ "$rel_path" != "$file_path" ]] || exit 0
 
-module_id=$(bun -e '
-  const { join } = require("node:path");
-  const [systemRoot, relPath] = process.argv.slice(1);
-  try {
-    const requireFn = require;
-    const systemPath = join(systemRoot, ".als", "system.ts");
-    const resolvedPath = requireFn.resolve(systemPath);
-    delete requireFn.cache?.[resolvedPath];
-    const loaded = requireFn(resolvedPath);
-    const system = loaded.system ?? loaded.default;
-    for (const [moduleId, moduleConfig] of Object.entries(system?.modules ?? {})) {
-      if (relPath === moduleConfig.path || relPath.startsWith(`${moduleConfig.path}/`)) {
-        console.log(moduleId);
-        break;
-      }
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`ALS breadcrumb hook: could not load ${join(systemRoot, ".als", "system.ts")}: ${message}`);
-  }
-' "$system_root" "$rel_path")
+module_id=$(
+  bun "$CLAUDE_PLUGIN_ROOT/alsc/compiler/src/index.ts" system module-owner "$system_root" "$rel_path" 2>/dev/null \
+    || true
+)
 
 # Also catch writes to .als/ metadata (module entrypoints, system.ts, etc.)
 if [[ -z "$module_id" && "$rel_path" == ".als/"* ]]; then

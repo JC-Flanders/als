@@ -18,8 +18,6 @@ import {
 
 const alsRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const referenceSystemRoot = resolve(alsRepoRoot, "reference-system");
-const authoringRuntimeRoot = resolve(alsRepoRoot, "alsc/compiler/src/authoring");
-const contractsRuntimePath = resolve(alsRepoRoot, "alsc/compiler/src/contracts.ts");
 const dispatcherCurrentBundleRoot = resolve(alsRepoRoot, "delamain-dispatcher");
 const dispatcherV11FixtureRoot = resolve(alsRepoRoot, "alsc/upgrade-construct/test/fixtures/dispatcher-v11");
 
@@ -33,8 +31,6 @@ async function withSystemRepo(
 
   try {
     await cp(referenceSystemRoot, repoRoot, { recursive: true });
-    await cp(authoringRuntimeRoot, join(root, "alsc", "compiler", "src", "authoring"), { recursive: true });
-    await writeFixtureFile(root, "alsc/compiler/src/contracts.ts", await readFile(contractsRuntimePath, "utf-8"));
     await replaceDispatcherFleet(repoRoot, dispatcherCurrentBundleRoot);
     initializeGitRepository(repoRoot);
     await run({
@@ -472,8 +468,8 @@ test("update-transaction CLI prepare emits a ready transaction payload", async (
     expect(result.exitCode).toBe(0);
     const output = JSON.parse(result.stdout) as PreparedUpdateTransaction;
     expect(output.status).toBe("ready");
-    expect(output.language?.plan.hops.map((hop) => hop.hop_id)).toEqual(["v2-to-v2"]);
-    expect(output.prompts.some((prompt) => prompt.key === "v2-to-v2:confirm-live-apply")).toBe(true);
+    expect(output.language?.plan.hops.map((hop) => hop.hop_id)).toEqual(["v3-to-v3"]);
+    expect(output.prompts.some((prompt) => prompt.key === "v3-to-v3:confirm-live-apply")).toBe(true);
   });
 });
 
@@ -523,17 +519,17 @@ function createLanguagePlan(
   steps: LanguageUpgradeRecipe["steps"],
 ): UpdateTransactionLanguagePlan {
   return {
-    current_als_version: 2,
-    target_als_version: 2,
+    current_als_version: 3,
+    target_als_version: 3,
     hops: [{
-      hop_id: "v2-to-v2",
+      hop_id: "v3-to-v3",
       recipe: {
         schema: "als-language-upgrade-recipe@1",
         from: {
-          als_version: 2,
+          als_version: 3,
         },
         to: {
-          als_version: 2,
+          als_version: 3,
         },
         summary: "Synthetic transaction-wrapper hop.",
         steps,

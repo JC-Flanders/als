@@ -851,7 +851,7 @@ test("deploy library reports schema validation details when module.ts is structu
     await writePath(
       root,
       ".als/modules/people/v1/module.ts",
-      'import { defineModule } from "../../../authoring.ts";\n\nexport const module = defineModule({\n  "dependencies": [],\n  "entities": []\n} as const);\n\nexport default module;\n',
+      'import { defineModule } from "als:authoring";\n\nexport const module = defineModule({\n  "dependencies": [],\n  "entities": []\n} as const);\n\nexport default module;\n',
     );
 
     const validationContext = loadSystemValidationContext(root);
