@@ -20,11 +20,19 @@ For the file contract and sensitive-data boundary, see [`../docs/references/oper
 
 ### Step 1 — Resolve and inspect the current config
 
+Initialize runtime variables:
+
+```bash
+bash {skill-dir}/../lib/runtime-env.sh
+```
+
+Extract `ALS_PLUGIN_ROOT` and `SYSTEM_ROOT` from the output. If the output is `NO_SYSTEM`, stop and tell the operator this command must be run inside an initialized ALS system.
+
 Resolve the canonical path through the compiler helper:
 
 ```bash
-CONFIG_PATH="$(bun ${CLAUDE_PLUGIN_ROOT}/alsc/compiler/src/cli.ts operator-config path)"
-bun ${CLAUDE_PLUGIN_ROOT}/alsc/compiler/src/cli.ts operator-config inspect "$CONFIG_PATH"
+CONFIG_PATH="$(bun ${ALS_PLUGIN_ROOT}/alsc/compiler/src/cli.ts operator-config path ${SYSTEM_ROOT})"
+bun ${ALS_PLUGIN_ROOT}/alsc/compiler/src/cli.ts operator-config inspect "$CONFIG_PATH"
 ```
 
 Interpret the result:
@@ -95,7 +103,7 @@ mkdir -p "$(dirname "$CONFIG_PATH")"
 Immediately validate the rewritten file:
 
 ```bash
-bun ${CLAUDE_PLUGIN_ROOT}/alsc/compiler/src/cli.ts operator-config inspect "$CONFIG_PATH"
+bun ${ALS_PLUGIN_ROOT}/alsc/compiler/src/cli.ts operator-config inspect "$CONFIG_PATH"
 ```
 
 If validation fails or reports credential warnings, do not stop with a broken file. Continue the repair loop until the inspect output returns `status: "pass"`.

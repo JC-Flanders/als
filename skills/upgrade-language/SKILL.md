@@ -23,9 +23,17 @@ Use SDR 037 for the recipe contract and SDR 039 for the two-phase runtime contra
 ## Prerequisites
 
 1. Verify `bun` is on PATH.
-2. Run `cd ${CLAUDE_PLUGIN_ROOT}/alsc/compiler && bun install` so the compiler and recipe inspector can run.
+2. Initialize runtime variables:
 
-The runtime package at `${CLAUDE_PLUGIN_ROOT}/alsc/upgrade-language/` has no external dependencies, but the compiler does.
+```bash
+bash {skill-dir}/../lib/runtime-env.sh <system-root-or-current-directory>
+```
+
+Extract `ALS_PLUGIN_ROOT` and `SYSTEM_ROOT` from the output. If the output is `NO_SYSTEM`, continue to [Determine Scope](#determine-scope), ask the user when needed, then rerun initialization with the resolved path before proceeding.
+
+3. Run `cd ${ALS_PLUGIN_ROOT}/alsc/compiler && bun install` so the compiler and recipe inspector can run.
+
+The runtime package at `${ALS_PLUGIN_ROOT}/alsc/upgrade-language/` has no external dependencies, but the compiler does.
 
 ## Determine Scope
 
@@ -46,16 +54,16 @@ Rules:
 1. Validate the live system before planning any upgrade work.
 
 ```bash
-bun ${CLAUDE_PLUGIN_ROOT}/alsc/compiler/src/cli.ts validate <system-root>
+bun ${ALS_PLUGIN_ROOT}/alsc/compiler/src/cli.ts validate ${SYSTEM_ROOT}
 ```
 
 2. Read the current `als_version` from the validation output.
-3. Discover the hop bundles under `${CLAUDE_PLUGIN_ROOT}/language-upgrades/recipes/`.
+3. Discover the hop bundles under `${ALS_PLUGIN_ROOT}/language-upgrades/recipes/`.
 4. Build the chain `vN → vN+1 → ... → vM`.
 5. For every hop, inspect the authored bundle before execution.
 
 ```bash
-bun ${CLAUDE_PLUGIN_ROOT}/alsc/compiler/src/cli.ts upgrade-recipe inspect <recipe-bundle-or-recipe.yaml>
+bun ${ALS_PLUGIN_ROOT}/alsc/compiler/src/cli.ts upgrade-recipe inspect <recipe-bundle-or-recipe.yaml>
 ```
 
 6. Summarize for the operator:
@@ -73,7 +81,7 @@ If any hop fails inspection, stop. Do not run a partial or uninspected chain.
 
 ## Execution Rules
 
-Execution is governed by the runtime engine in `${CLAUDE_PLUGIN_ROOT}/alsc/upgrade-language/src/`.
+Execution is governed by the runtime engine in `${ALS_PLUGIN_ROOT}/alsc/upgrade-language/src/`.
 
 Honor these rules exactly:
 
@@ -105,7 +113,7 @@ Honor these rules exactly:
 1. Validate the upgraded system again.
 
 ```bash
-bun ${CLAUDE_PLUGIN_ROOT}/alsc/compiler/src/cli.ts validate <system-root>
+bun ${ALS_PLUGIN_ROOT}/alsc/compiler/src/cli.ts validate ${SYSTEM_ROOT}
 ```
 
 2. Report the final per-hop outcome, the final `als_version`, and any future obligations acknowledged during `operator-prompt` steps.

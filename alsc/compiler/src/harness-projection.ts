@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { loadAuthoredSourceExport } from "./authored-load.ts";
@@ -14,30 +14,44 @@ import {
   toRepoRelative,
   toSystemRelative,
 } from "./system-paths.ts";
+import {
+  getHarnessRuntimeSpec,
+  type HarnessRuntimeSpec,
+  type HarnessTarget,
+} from "../../shared/harnesses.ts";
 import type {
-  ClaudeDelamainNameConflict,
-  ClaudeDelamainProjectionCollision,
-  ClaudeDelamainProjectionPlan,
-  ClaudeSkillDeployOutput,
-  ClaudeSkillDeployWarning,
-  ClaudeSkillProjectionCollision,
-  ClaudeSkillProjectionPlan,
-  ClaudeSystemFilePlan,
+  HarnessDelamainNameConflict,
+  HarnessDelamainProjectionCollision,
+  HarnessDelamainProjectionPlan,
+  HarnessDeployOutput,
+  HarnessDeployWarning,
+  HarnessSkillProjectionCollision,
+  HarnessSkillProjectionPlan,
+  HarnessSystemInstructionPlan,
 } from "./types.ts";
 import { loadSystemValidationContext, validateLoadedSystem } from "./validate.ts";
 
-export interface ClaudeSkillDeployOptions {
+export interface HarnessDeployOptions {
   dry_run?: boolean;
   module_filter?: string;
   require_empty_targets?: boolean;
 }
 
-interface ClaudeSkillProjectionWorkPlan extends ClaudeSkillProjectionPlan {
+interface HarnessProjectionSpec extends HarnessRuntimeSpec {
+  deploy_output_schema: string;
+  system_instruction_kind: HarnessSystemInstructionPlan["kind"];
+  system_instruction_contents: string;
+  target_collision_roots_label: string;
+  transform_projected_skill_text?: (value: string) => string;
+}
+
+interface HarnessSkillProjectionWorkPlan extends HarnessSkillProjectionPlan {
   source_dir_abs: string;
   target_dir_abs: string;
 }
 
-interface ClaudeDelamainProjectionWorkPlan extends ClaudeDelamainProjectionPlan {
+interface HarnessDelamainProjectionWorkPlan extends HarnessDelamainProjectionPlan {
+  harness: HarnessTarget;
   source_dir_abs: string;
   dispatcher_source_dir_abs: string;
   target_dir_abs: string;
@@ -53,12 +67,12 @@ interface ClaudeDelamainProjectionWorkPlan extends ClaudeDelamainProjectionPlan 
   rendered_delamain_yaml: string;
 }
 
-interface ClaudeSystemFileWorkPlan extends ClaudeSystemFilePlan {
+interface HarnessSystemInstructionWorkPlan extends HarnessSystemInstructionPlan {
   target_path_abs: string;
   contents: string;
 }
 
-type ClaudeSkillDeployProceedStatus = Exclude<ClaudeSkillDeployOutput["validation_status"], "fail">;
+type HarnessDeployProceedStatus = Exclude<HarnessDeployOutput["validation_status"], "fail">;
 
 type DelamainBindingSelection =
   | { kind: "none" }
@@ -89,14 +103,13 @@ interface DelamainRuntimeManifestConfig {
 }
 
 const DELAMAIN_RUNTIME_MANIFEST_SCHEMA = "als-delamain-runtime-manifest@1";
-const ALS_SYSTEM_CLAUDE_MD_TARGET_PATH = ".als/CLAUDE.md";
 const DELAMAIN_RUNTIME_MANIFEST_CONFIG = "runtime-manifest.config.json";
 const CANONICAL_DISPATCHER_TEMPLATE_DIR = resolve(
   import.meta.dir,
   "../../../delamain-dispatcher",
 );
 
-export const ALS_SYSTEM_CLAUDE_MD_CONTENTS = `# .als Directory
+export const ALS_CLAUDE_SYSTEM_INSTRUCTION_CONTENTS = `# .als Directory
 
 This directory is managed by ALS. Its contents are generated and maintained by ALS skills and the compiler.
 
@@ -109,7 +122,51 @@ The compiler reads from \`.als/\` and projects runtime assets into \`.claude/\`.
 Customize the system through ALS skills, not by editing \`.als/\` files directly.
 `;
 
-export function deployClaudeSkills(systemRootInput: string, options: ClaudeSkillDeployOptions = {}): ClaudeSkillDeployOutput {
+export const ALS_CODEX_SYSTEM_INSTRUCTION_CONTENTS = `# .als Directory
+
+This directory is managed by ALS. Its contents are generated and maintained by ALS skills and the compiler.
+
+Do not manually add, edit, or remove files here. Make changes through ALS skills such as \`$new\`, \`$change\`, \`$migrate\`, and \`$validate\`.
+
+This directory contains ALS definitions, including shapes, Delamain bundles, skill definitions, and migration bundles.
+
+The compiler reads from \`.als/\` and projects Codex runtime assets into \`.agents/\` and \`.codex/\`.
+
+Customize the system through ALS skills, not by editing \`.als/\` files directly.
+`;
+
+const HARNESS_PROJECTION_SPECS: Record<HarnessTarget, HarnessProjectionSpec> = {
+  claude: {
+    ...getHarnessRuntimeSpec("claude"),
+    deploy_output_schema: DEPLOY_OUTPUT_SCHEMA_LITERAL,
+    system_instruction_kind: "generated_claude_guidance",
+    system_instruction_contents: ALS_CLAUDE_SYSTEM_INSTRUCTION_CONTENTS,
+    target_collision_roots_label: ".claude/skills or .claude/delamains",
+  },
+  codex: {
+    ...getHarnessRuntimeSpec("codex"),
+    deploy_output_schema: "als-codex-deploy-output@1",
+    system_instruction_kind: "generated_codex_guidance",
+    system_instruction_contents: ALS_CODEX_SYSTEM_INSTRUCTION_CONTENTS,
+    target_collision_roots_label: ".agents/skills or .codex/delamains",
+    transform_projected_skill_text: rewriteCodexProjectedSkillText,
+  },
+};
+
+export function deployClaudeSkills(systemRootInput: string, options: HarnessDeployOptions = {}): HarnessDeployOutput {
+  return deployHarnessProjection("claude", systemRootInput, options);
+}
+
+export function deployCodexSkills(systemRootInput: string, options: HarnessDeployOptions = {}): HarnessDeployOutput {
+  return deployHarnessProjection("codex", systemRootInput, options);
+}
+
+export function deployHarnessProjection(
+  target: HarnessTarget,
+  systemRootInput: string,
+  options: HarnessDeployOptions = {},
+): HarnessDeployOutput {
+  const spec = HARNESS_PROJECTION_SPECS[target];
   const systemRootAbs = resolve(systemRootInput);
   const validationContext = loadSystemValidationContext(systemRootAbs);
   const systemRootRel = validationContext.system_root_rel;
@@ -125,7 +182,8 @@ export function deployClaudeSkills(systemRootInput: string, options: ClaudeSkill
       moduleFilter,
       dryRun,
       requireEmptyTargets,
-      "System validation failed. Fix validation errors before deploying Claude projections.",
+      `System validation failed. Fix validation errors before deploying ${spec.display_name} projections.`,
+      spec,
     );
   }
 
@@ -138,6 +196,7 @@ export function deployClaudeSkills(systemRootInput: string, options: ClaudeSkill
       dryRun,
       requireEmptyTargets,
       "System validation did not produce a deployable system configuration.",
+      spec,
     );
   }
 
@@ -149,18 +208,39 @@ export function deployClaudeSkills(systemRootInput: string, options: ClaudeSkill
       dryRun,
       requireEmptyTargets,
       `Unknown module filter '${moduleFilter}'.`,
+      spec,
     );
   }
 
-  return deployClaudeSkillsFromConfig(systemRootAbs, systemConfig, initialValidation.status, options);
+  return deployHarnessProjectionFromConfig(target, systemRootAbs, systemConfig, initialValidation.status, options);
 }
 
 export function deployClaudeSkillsFromConfig(
   systemRootInput: string,
   systemConfig: SystemConfig,
-  validationStatus: ClaudeSkillDeployProceedStatus,
-  options: ClaudeSkillDeployOptions = {},
-): ClaudeSkillDeployOutput {
+  validationStatus: HarnessDeployProceedStatus,
+  options: HarnessDeployOptions = {},
+): HarnessDeployOutput {
+  return deployHarnessProjectionFromConfig("claude", systemRootInput, systemConfig, validationStatus, options);
+}
+
+export function deployCodexSkillsFromConfig(
+  systemRootInput: string,
+  systemConfig: SystemConfig,
+  validationStatus: HarnessDeployProceedStatus,
+  options: HarnessDeployOptions = {},
+): HarnessDeployOutput {
+  return deployHarnessProjectionFromConfig("codex", systemRootInput, systemConfig, validationStatus, options);
+}
+
+export function deployHarnessProjectionFromConfig(
+  target: HarnessTarget,
+  systemRootInput: string,
+  systemConfig: SystemConfig,
+  validationStatus: HarnessDeployProceedStatus,
+  options: HarnessDeployOptions = {},
+): HarnessDeployOutput {
+  const spec = HARNESS_PROJECTION_SPECS[target];
   const systemRootAbs = resolve(systemRootInput);
   const systemRootRel = toRepoRelative(systemRootAbs);
   const dryRun = options.dry_run ?? false;
@@ -175,13 +255,15 @@ export function deployClaudeSkillsFromConfig(
       dryRun,
       requireEmptyTargets,
       `Unknown module filter '${moduleFilter}'.`,
+      spec,
     );
   }
 
-  const systemFilePlans = buildSystemFilePlans(systemRootAbs);
-  const planning = buildProjectionPlans(systemRootAbs, systemConfig, moduleFilter);
+  const systemFilePlans = buildSystemFilePlans(systemRootAbs, spec);
+  const planning = buildProjectionPlans(systemRootAbs, systemConfig, moduleFilter, spec);
   if (planning.error) {
     return buildDeployOutput({
+      spec,
       status: "fail",
       systemRootRel,
       validationStatus,
@@ -197,6 +279,7 @@ export function deployClaudeSkillsFromConfig(
       writtenDelamainCount: 0,
       existingDelamainTargets: collectExistingDelamainTargets(planning.delamain_plans),
       delamainNameConflicts: planning.delamain_name_conflicts,
+      warnings: [],
       error: planning.error,
     });
   }
@@ -210,6 +293,7 @@ export function deployClaudeSkillsFromConfig(
 
   if (delamainNameConflicts.length > 0) {
     return buildDeployOutput({
+      spec,
       status: "fail",
       systemRootRel,
       validationStatus,
@@ -226,12 +310,13 @@ export function deployClaudeSkillsFromConfig(
       existingDelamainTargets,
       delamainNameConflicts,
       warnings,
-      error: "One or more Delamain names would collide under .claude/delamains.",
+      error: `One or more Delamain names would collide under ${spec.delamain_runtime_root}.`,
     });
   }
 
   if (requireEmptyTargets && (existingSkillTargets.length > 0 || existingDelamainTargets.length > 0)) {
     return buildDeployOutput({
+      spec,
       status: "fail",
       systemRootRel,
       validationStatus,
@@ -248,7 +333,7 @@ export function deployClaudeSkillsFromConfig(
       existingDelamainTargets,
       delamainNameConflicts: [],
       warnings,
-      error: "One or more target paths already exist under .claude/skills or .claude/delamains.",
+      error: `One or more target paths already exist under ${spec.target_collision_roots_label}.`,
     });
   }
 
@@ -262,6 +347,7 @@ export function deployClaudeSkillsFromConfig(
         writtenSystemFileCount += 1;
       } catch (error) {
         return buildDeployOutput({
+          spec,
           status: "fail",
           systemRootRel,
           validationStatus,
@@ -278,17 +364,18 @@ export function deployClaudeSkillsFromConfig(
           existingDelamainTargets,
           delamainNameConflicts: [],
           warnings,
-          error: `Could not write Claude system file '${plan.target_path}': ${formatError(error)}`,
+          error: `Could not write ${spec.display_name} system file '${plan.target_path}': ${formatError(error)}`,
         });
       }
     }
 
     for (const plan of skillPlans) {
       try {
-        overwriteProjectionDirectory(plan.source_dir_abs, plan.target_dir_abs);
+        overwriteSkillProjectionDirectory(plan.source_dir_abs, plan.target_dir_abs, spec);
         writtenSkillCount += 1;
       } catch (error) {
         return buildDeployOutput({
+          spec,
           status: "fail",
           systemRootRel,
           validationStatus,
@@ -305,7 +392,7 @@ export function deployClaudeSkillsFromConfig(
           existingDelamainTargets,
           delamainNameConflicts: [],
           warnings,
-          error: `Could not write Claude skill projection '${plan.skill_id}' to '${plan.target_dir}': ${formatError(error)}`,
+          error: `Could not write ${spec.display_name} skill projection '${plan.skill_id}' to '${plan.target_dir}': ${formatError(error)}`,
         });
       }
     }
@@ -320,6 +407,7 @@ export function deployClaudeSkillsFromConfig(
         writtenDelamainCount += 1;
       } catch (error) {
         return buildDeployOutput({
+          spec,
           status: "fail",
           systemRootRel,
           validationStatus,
@@ -336,13 +424,14 @@ export function deployClaudeSkillsFromConfig(
           existingDelamainTargets,
           delamainNameConflicts: [],
           warnings,
-          error: `Could not write Claude Delamain projection '${plan.delamain_name}' to '${plan.target_dir}': ${formatError(error)}`,
+          error: `Could not write ${spec.display_name} Delamain projection '${plan.delamain_name}' to '${plan.target_dir}': ${formatError(error)}`,
         });
       }
     }
   }
 
   return buildDeployOutput({
+    spec,
     status: "pass",
     systemRootRel,
     validationStatus,
@@ -367,15 +456,16 @@ function buildProjectionPlans(
   systemRootAbs: string,
   systemConfig: SystemConfig,
   moduleFilter: string | null,
+  spec: HarnessProjectionSpec,
 ): {
-  skill_plans: ClaudeSkillProjectionWorkPlan[];
-  delamain_plans: ClaudeDelamainProjectionWorkPlan[];
-  delamain_name_conflicts: ClaudeDelamainNameConflict[];
+  skill_plans: HarnessSkillProjectionWorkPlan[];
+  delamain_plans: HarnessDelamainProjectionWorkPlan[];
+  delamain_name_conflicts: HarnessDelamainNameConflict[];
   error: string | null;
 } {
   const moduleIds = moduleFilter ? [moduleFilter] : Object.keys(systemConfig.modules).sort();
-  const skillPlans: ClaudeSkillProjectionWorkPlan[] = [];
-  const delamainPlans: ClaudeDelamainProjectionWorkPlan[] = [];
+  const skillPlans: HarnessSkillProjectionWorkPlan[] = [];
+  const delamainPlans: HarnessDelamainProjectionWorkPlan[] = [];
 
   for (const moduleId of moduleIds) {
     const moduleConfig = systemConfig.modules[moduleId];
@@ -383,7 +473,7 @@ function buildProjectionPlans(
     for (const skillId of [...moduleConfig.skills].sort()) {
       const sourceEntryAbs = resolve(systemRootAbs, inferredSkillEntryPath(moduleId, moduleConfig.version, skillId));
       const sourceDirAbs = dirname(sourceEntryAbs);
-      const targetDirAbs = resolve(systemRootAbs, ".claude/skills", skillId);
+      const targetDirAbs = resolve(systemRootAbs, spec.generated_skill_root, skillId);
 
       skillPlans.push({
         module_id: moduleId,
@@ -396,7 +486,7 @@ function buildProjectionPlans(
       });
     }
 
-    const loadedShape = loadModuleShapeForProjection(systemRootAbs, moduleId, moduleConfig.version);
+    const loadedShape = loadModuleShapeForProjection(systemRootAbs, moduleId, moduleConfig.version, spec);
     if (!loadedShape.shape) {
       return {
         skill_plans: skillPlans,
@@ -431,8 +521,8 @@ function buildProjectionPlans(
 
       const sourceEntryAbs = resolve(moduleBundleAbs, registryEntry.path);
       const sourceDirAbs = dirname(sourceEntryAbs);
-      const targetDirAbs = resolve(systemRootAbs, ".claude/delamains", delamainName);
-      const loadedDelamain = loadDelamainForProjection(moduleId, sourceEntryAbs);
+      const targetDirAbs = resolve(systemRootAbs, spec.delamain_runtime_root, delamainName);
+      const loadedDelamain = loadDelamainForProjection(moduleId, sourceEntryAbs, spec);
       if (!loadedDelamain.shape) {
         return {
           skill_plans: skillPlans,
@@ -465,6 +555,7 @@ function buildProjectionPlans(
       }
 
       delamainPlans.push({
+        harness: spec.target,
         module_id: moduleId,
         module_version: moduleConfig.version,
         delamain_name: delamainName,
@@ -495,14 +586,14 @@ function buildProjectionPlans(
   };
 }
 
-function buildSystemFilePlans(systemRootAbs: string): ClaudeSystemFileWorkPlan[] {
-  const targetPathAbs = resolve(systemRootAbs, ALS_SYSTEM_CLAUDE_MD_TARGET_PATH);
+function buildSystemFilePlans(systemRootAbs: string, spec: HarnessProjectionSpec): HarnessSystemInstructionWorkPlan[] {
+  const targetPathAbs = resolve(systemRootAbs, spec.system_instruction_path);
   return [
     {
-      kind: "generated_claude_guidance",
+      kind: spec.system_instruction_kind,
       target_path: toSystemRelative(systemRootAbs, targetPathAbs),
       target_path_abs: targetPathAbs,
-      contents: ALS_SYSTEM_CLAUDE_MD_CONTENTS,
+      contents: spec.system_instruction_contents,
     },
   ];
 }
@@ -511,13 +602,14 @@ function loadModuleShapeForProjection(
   systemRootAbs: string,
   moduleId: string,
   version: number,
+  spec: HarnessProjectionSpec,
 ): { shape: ModuleShape | null; error: string | null } {
   const shapePathAbs = resolve(systemRootAbs, inferredModuleEntryPath(moduleId, version));
   const loadedShape = loadAuthoredSourceExport(shapePathAbs, "module", "module_shape", "projection", moduleId);
   if (!loadedShape.success) {
     return {
       shape: null,
-      error: `Could not load module.ts while planning Claude projection for module '${moduleId}': ${loadedShape.diagnostics.map((diagnostic) => diagnostic.message).join("; ")}`,
+      error: `Could not load module.ts while planning ${spec.display_name} projection for module '${moduleId}': ${loadedShape.diagnostics.map((diagnostic) => diagnostic.message).join("; ")}`,
     };
   }
 
@@ -525,7 +617,7 @@ function loadModuleShapeForProjection(
   if (!parsedShape.success) {
     return {
       shape: null,
-      error: `Could not validate module.ts while planning Claude projection for module '${moduleId}': ${formatZodIssues(parsedShape.error.issues)}`,
+      error: `Could not validate module.ts while planning ${spec.display_name} projection for module '${moduleId}': ${formatZodIssues(parsedShape.error.issues)}`,
     };
   }
 
@@ -538,12 +630,13 @@ function loadModuleShapeForProjection(
 function loadDelamainForProjection(
   moduleId: string,
   entryPathAbs: string,
+  spec: HarnessProjectionSpec,
 ): { shape: DelamainShape | null; error: string | null } {
   const loadedDelamain = loadAuthoredSourceExport(entryPathAbs, "delamain", "module_shape", "projection", moduleId);
   if (!loadedDelamain.success) {
     return {
       shape: null,
-      error: `Could not load delamain.ts while planning Claude projection for module '${moduleId}': ${loadedDelamain.diagnostics.map((diagnostic) => diagnostic.message).join("; ")}`,
+      error: `Could not load delamain.ts while planning ${spec.display_name} projection for module '${moduleId}': ${loadedDelamain.diagnostics.map((diagnostic) => diagnostic.message).join("; ")}`,
     };
   }
 
@@ -551,7 +644,7 @@ function loadDelamainForProjection(
   if (!parsedDelamain.success) {
     return {
       shape: null,
-      error: `Could not validate delamain.ts while planning Claude projection for module '${moduleId}': ${formatZodIssues(parsedDelamain.error.issues)}`,
+      error: `Could not validate delamain.ts while planning ${spec.display_name} projection for module '${moduleId}': ${formatZodIssues(parsedDelamain.error.issues)}`,
     };
   }
 
@@ -707,8 +800,8 @@ function selectSingleDelamainBinding(fields: Record<string, FieldShape>): Delama
   };
 }
 
-function collectDelamainNameConflicts(plans: ClaudeDelamainProjectionWorkPlan[]): ClaudeDelamainNameConflict[] {
-  const grouped = new Map<string, ClaudeDelamainProjectionWorkPlan[]>();
+function collectDelamainNameConflicts(plans: HarnessDelamainProjectionWorkPlan[]): HarnessDelamainNameConflict[] {
+  const grouped = new Map<string, HarnessDelamainProjectionWorkPlan[]>();
 
   for (const plan of plans) {
     const existing = grouped.get(plan.delamain_name);
@@ -719,7 +812,7 @@ function collectDelamainNameConflicts(plans: ClaudeDelamainProjectionWorkPlan[])
     grouped.set(plan.delamain_name, [plan]);
   }
 
-  const conflicts: ClaudeDelamainNameConflict[] = [];
+  const conflicts: HarnessDelamainNameConflict[] = [];
 
   for (const [delamainName, conflictPlans] of grouped) {
     const distinctModules = [...new Set(conflictPlans.map((plan) => plan.module_id))].sort();
@@ -735,8 +828,8 @@ function collectDelamainNameConflicts(plans: ClaudeDelamainProjectionWorkPlan[])
   return conflicts.sort((left, right) => left.delamain_name.localeCompare(right.delamain_name));
 }
 
-function collectExistingSkillTargets(plans: ClaudeSkillProjectionWorkPlan[]): ClaudeSkillProjectionCollision[] {
-  const collisions: ClaudeSkillProjectionCollision[] = [];
+function collectExistingSkillTargets(plans: HarnessSkillProjectionWorkPlan[]): HarnessSkillProjectionCollision[] {
+  const collisions: HarnessSkillProjectionCollision[] = [];
 
   for (const plan of plans) {
     const stat = safeStat(plan.target_dir_abs);
@@ -754,8 +847,8 @@ function collectExistingSkillTargets(plans: ClaudeSkillProjectionWorkPlan[]): Cl
   return collisions;
 }
 
-function collectExistingDelamainTargets(plans: ClaudeDelamainProjectionWorkPlan[]): ClaudeDelamainProjectionCollision[] {
-  const collisions: ClaudeDelamainProjectionCollision[] = [];
+function collectExistingDelamainTargets(plans: HarnessDelamainProjectionWorkPlan[]): HarnessDelamainProjectionCollision[] {
+  const collisions: HarnessDelamainProjectionCollision[] = [];
 
   for (const plan of plans) {
     const stat = safeStat(plan.target_dir_abs);
@@ -773,8 +866,8 @@ function collectExistingDelamainTargets(plans: ClaudeDelamainProjectionWorkPlan[
   return collisions;
 }
 
-function collectDelamainProjectionWarnings(plans: ClaudeDelamainProjectionWorkPlan[]): ClaudeSkillDeployWarning[] {
-  const warnings: ClaudeSkillDeployWarning[] = [];
+function collectDelamainProjectionWarnings(plans: HarnessDelamainProjectionWorkPlan[]): HarnessDeployWarning[] {
+  const warnings: HarnessDeployWarning[] = [];
 
   for (const plan of plans) {
     const targetStat = safeStat(plan.target_dir_abs);
@@ -800,7 +893,7 @@ function collectDelamainProjectionWarnings(plans: ClaudeDelamainProjectionWorkPl
   return warnings;
 }
 
-function toSkillProjectionPlan(plan: ClaudeSkillProjectionWorkPlan): ClaudeSkillProjectionPlan {
+function toSkillProjectionPlan(plan: HarnessSkillProjectionWorkPlan): HarnessSkillProjectionPlan {
   return {
     module_id: plan.module_id,
     module_version: plan.module_version,
@@ -810,7 +903,7 @@ function toSkillProjectionPlan(plan: ClaudeSkillProjectionWorkPlan): ClaudeSkill
   };
 }
 
-function toDelamainProjectionPlan(plan: ClaudeDelamainProjectionWorkPlan): ClaudeDelamainProjectionPlan {
+function toDelamainProjectionPlan(plan: HarnessDelamainProjectionWorkPlan): HarnessDelamainProjectionPlan {
   return {
     module_id: plan.module_id,
     module_version: plan.module_version,
@@ -820,7 +913,7 @@ function toDelamainProjectionPlan(plan: ClaudeDelamainProjectionWorkPlan): Claud
   };
 }
 
-function toSystemFilePlan(plan: ClaudeSystemFileWorkPlan): ClaudeSystemFilePlan {
+function toSystemFilePlan(plan: HarnessSystemInstructionWorkPlan): HarnessSystemInstructionPlan {
   return {
     kind: plan.kind,
     target_path: plan.target_path,
@@ -851,6 +944,57 @@ function overwriteProjectionDirectory(sourceDirAbs: string, targetDirAbs: string
   rmSync(targetDirAbs, { recursive: true, force: true });
   mkdirSync(dirname(targetDirAbs), { recursive: true });
   cpSync(sourceDirAbs, targetDirAbs, { recursive: true });
+}
+
+function overwriteSkillProjectionDirectory(
+  sourceDirAbs: string,
+  targetDirAbs: string,
+  spec: HarnessProjectionSpec,
+): void {
+  overwriteProjectionDirectory(sourceDirAbs, targetDirAbs);
+  if (!spec.transform_projected_skill_text) {
+    return;
+  }
+
+  rewriteProjectedSkillDirectory(targetDirAbs, spec.transform_projected_skill_text);
+}
+
+function rewriteProjectedSkillDirectory(
+  dirAbs: string,
+  transform: (value: string) => string,
+): void {
+  for (const entry of readdirSync(dirAbs, { withFileTypes: true })) {
+    const pathAbs = resolve(dirAbs, entry.name);
+    if (entry.isDirectory()) {
+      rewriteProjectedSkillDirectory(pathAbs, transform);
+      continue;
+    }
+
+    if (!entry.isFile() || entry.name !== "SKILL.md") {
+      continue;
+    }
+
+    const current = readFileSync(pathAbs, "utf-8");
+    const rewritten = transform(current);
+    if (rewritten !== current) {
+      writeFileSync(pathAbs, rewritten, "utf-8");
+    }
+  }
+}
+
+function rewriteCodexProjectedSkillText(value: string): string {
+  return value
+    .replaceAll("${CLAUDE_PLUGIN_ROOT}", "${ALS_PLUGIN_ROOT}")
+    .replaceAll("$CLAUDE_PLUGIN_ROOT", "$ALS_PLUGIN_ROOT")
+    .replaceAll("CLAUDE_PLUGIN_ROOT", "ALS_PLUGIN_ROOT")
+    .replaceAll("Claude Code", "Codex")
+    .replaceAll("Claude", "Codex")
+    .replaceAll("`/install`", "`$install`")
+    .replaceAll("`/new`", "`$new`")
+    .replaceAll("`/validate`", "`$validate`")
+    .replaceAll("`/change`", "`$change`")
+    .replaceAll("`/migrate`", "`$migrate`")
+    .replaceAll("`/update`", "`$update`");
 }
 
 function mergeProjectionDirectory(sourceDirAbs: string, targetDirAbs: string): void {
@@ -909,18 +1053,19 @@ function removeProjectionOnlyDelamainFiles(targetDirAbs: string): void {
   rmSync(resolve(targetDirAbs, DELAMAIN_RUNTIME_MANIFEST_CONFIG), { force: true });
 }
 
-function writeSystemFile(plan: ClaudeSystemFileWorkPlan): void {
+function writeSystemFile(plan: HarnessSystemInstructionWorkPlan): void {
   mkdirSync(dirname(plan.target_path_abs), { recursive: true });
   writeFileSync(plan.target_path_abs, plan.contents);
 }
 
-function writeProjectedDelamainDefinition(plan: ClaudeDelamainProjectionWorkPlan): void {
+function writeProjectedDelamainDefinition(plan: HarnessDelamainProjectionWorkPlan): void {
   writeFileSync(resolve(plan.target_dir_abs, "delamain.yaml"), plan.rendered_delamain_yaml);
 }
 
-function writeDelamainRuntimeManifest(plan: ClaudeDelamainProjectionWorkPlan): void {
+function writeDelamainRuntimeManifest(plan: HarnessDelamainProjectionWorkPlan): void {
   const manifest = {
     schema: DELAMAIN_RUNTIME_MANIFEST_SCHEMA,
+    harness: plan.harness,
     delamain_name: plan.delamain_name,
     module_id: plan.module_id,
     module_version: plan.module_version,
@@ -1165,13 +1310,15 @@ function formatError(error: unknown): string {
 
 function buildFailureOutput(
   systemRootRel: string,
-  validationStatus: ClaudeSkillDeployOutput["validation_status"],
+  validationStatus: HarnessDeployOutput["validation_status"],
   moduleFilter: string | null,
   dryRun: boolean,
   requireEmptyTargets: boolean,
   error: string,
-): ClaudeSkillDeployOutput {
+  spec: HarnessProjectionSpec,
+): HarnessDeployOutput {
   return buildDeployOutput({
+    spec,
     status: "fail",
     systemRootRel,
     validationStatus,
@@ -1193,26 +1340,27 @@ function buildFailureOutput(
 }
 
 function buildDeployOutput(params: {
-  status: ClaudeSkillDeployOutput["status"];
+  spec: HarnessProjectionSpec;
+  status: HarnessDeployOutput["status"];
   systemRootRel: string;
-  validationStatus: ClaudeSkillDeployOutput["validation_status"];
+  validationStatus: HarnessDeployOutput["validation_status"];
   moduleFilter: string | null;
   dryRun: boolean;
   requireEmptyTargets: boolean;
-  systemFilePlans: ClaudeSystemFileWorkPlan[];
+  systemFilePlans: HarnessSystemInstructionWorkPlan[];
   writtenSystemFileCount: number;
-  skillPlans: ClaudeSkillProjectionWorkPlan[];
+  skillPlans: HarnessSkillProjectionWorkPlan[];
   writtenSkillCount: number;
-  existingSkillTargets: ClaudeSkillProjectionCollision[];
-  delamainPlans: ClaudeDelamainProjectionWorkPlan[];
+  existingSkillTargets: HarnessSkillProjectionCollision[];
+  delamainPlans: HarnessDelamainProjectionWorkPlan[];
   writtenDelamainCount: number;
-  existingDelamainTargets: ClaudeDelamainProjectionCollision[];
-  delamainNameConflicts: ClaudeDelamainNameConflict[];
-  warnings: ClaudeSkillDeployWarning[];
+  existingDelamainTargets: HarnessDelamainProjectionCollision[];
+  delamainNameConflicts: HarnessDelamainNameConflict[];
+  warnings: HarnessDeployWarning[];
   error: string | null;
-}): ClaudeSkillDeployOutput {
+}): HarnessDeployOutput {
   return {
-    schema: DEPLOY_OUTPUT_SCHEMA_LITERAL,
+    schema: params.spec.deploy_output_schema,
     status: params.status,
     system_path: params.systemRootRel,
     generated_at: new Date().toISOString(),
