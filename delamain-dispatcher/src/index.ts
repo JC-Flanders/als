@@ -60,6 +60,7 @@ const runtime = new DispatcherRuntime({
   delamainsRoot: DELAMAINS_ROOT,
   submodules: config.submodules,
 });
+await runtime.ensurePrimaryCloneCommitGuards();
 
 console.log(`[dispatcher] system: ${SYSTEM_ROOT}`);
 console.log(`[dispatcher] bundle: ${BUNDLE_ROOT}`);

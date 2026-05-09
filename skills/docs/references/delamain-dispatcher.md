@@ -47,6 +47,14 @@ Merge-back success now has two explicit shapes:
 
 These merge-back semantics are anchored in [SDR 046](../../../sdr/046-delamain-dispatcher-merge-back-transaction-contract.md).
 
+ALS-090 adds a second, repo-local follow-through contract after canonical publication:
+
+- the primary clone for every published repo must converge to canonical upstream immediately when it is safe
+- when tracked or untracked operator work makes that unsafe, the dispatcher records pending convergence in git admin state and leaves the work untouched
+- the installed git pre-commit guard blocks stale-base commits while that pending state exists
+
+The release-side rationale and dirty-worktree trade are documented in [`als-factory/docs/release-model/update-mechanics/primary-clone-convergence.md`](../../../../als-factory/docs/release-model/update-mechanics/primary-clone-convergence.md).
+
 The dispatcher is supported from deployed `.claude/delamains/<name>/` bundles. Authored module bundles do not carry dispatcher source in ALS v2+, and the operator-side installed source lives under `.als/constructs/delamain-dispatcher/<name>/`.
 
 ## Telemetry Files
@@ -148,6 +156,7 @@ Git-backed isolation strategy.
 - Treats dirty integration checkouts as a retryable wait condition; once the operator cleans the tree, the poll loop re-runs refresh + merge-back under the same lease and escalates long-lived waits to `primary_dirty_timeout`
 - Keeps `stale_base_conflict` for the narrower "recorded base is no longer an ancestor of current HEAD" case, preserving the host and mounted worktrees for operator or agent-assist follow-up
 - Rolls back already-integrated primary clones if a later repo in the merge transaction fails, leaving the host worktree and mounted submodule worktrees preserved for inspection
+- After canonical publication settles, invokes the shared primary-clone convergence helper so pending-convergence admin state is cleared or refreshed on the primary clone that just published
 
 ### `src/repo-mutation-lock.ts`
 
@@ -237,6 +246,16 @@ Shared reader/writer for `runtime/worktree-state.json`.
 - Supports same-state and cross-state occupancy queries over open runtime records
 - Lets dashboard consumers inspect current active, blocked, orphaned, and guarded state plus provider metadata
 - Gives the dispatcher registry a single on-disk contract
+
+### `src/primary-clone-convergence.ts`
+
+Primary-clone follow-through and commit guard helper.
+
+- Fetches the canonical upstream branch for a primary clone and classifies the repo as already-current, fast-forwardable, local-commits-ahead, dirty, overlap-blocked, or replayable
+- Fast-forwards or rebases only when the primary clone is clean
+- Writes pending-convergence admin state to `git rev-parse --git-path als/primary-clone-convergence.json` when local work or overlapping paths make safe convergence impossible
+- Installs the git pre-commit guard wrapper used by dispatcher startup, chaining any pre-existing local hook instead of deleting it
+- Exposes both a machine-readable `converge` CLI and the `guard` subcommand that blocks stale-base commits before Git writes the commit object
 
 ## How Configuration Is Derived
 

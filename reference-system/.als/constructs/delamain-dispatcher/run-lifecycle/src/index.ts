@@ -53,6 +53,7 @@ const runtime = new DispatcherRuntime({
   pollMs: POLL_MS,
   submodules: config.submodules,
 });
+await runtime.ensurePrimaryCloneCommitGuards();
 
 console.log(`[dispatcher] system: ${SYSTEM_ROOT}`);
 console.log(`[dispatcher] bundle: ${BUNDLE_ROOT}`);
