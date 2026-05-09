@@ -14,7 +14,7 @@ The goal is to DESIGN/BRAINSTORM as if every platform were supported. When imple
 | `ALS-PLAT-CDSK` | Claude Code Desktop | Desktop | `$CLAUDE_CODE_ENTRYPOINT=claude-desktop` | Planned |
 | `ALS-PLAT-CWEB` | Claude Code Web | Web | `$CLAUDE_CODE_ENTRYPOINT=remote` | Planned |
 
-**Runtime signal** is the harness-specific signal used when one is documented. Claude Code exposes `$CLAUDE_CODE_ENTRYPOINT`. Codex CLI does not require an ALS dependency on an undocumented Codex entrypoint variable; Codex support is selected by the `codex` harness target and Codex-native file locations.
+**Runtime signal** is the harness-specific signal used when one is documented. For Claude Code, the listed `$CLAUDE_CODE_ENTRYPOINT` values were observed via [`/als:whereami`](../../../skills/whereami/SKILL.md) runs on 2026-04-17 for CLI, Desktop, and Web. `ALS-PLAT-CCWK` has not been observed yet. Codex CLI does not require an ALS dependency on an undocumented Codex entrypoint variable; Codex support is selected by the `codex` harness target and Codex-native file locations.
 
 ## Referencing a platform
 
