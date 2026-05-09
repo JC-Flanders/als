@@ -7,8 +7,9 @@
     {
       "name": "als",
       "source": {
-        "source": "local",
-        "path": "./"
+        "source": "url",
+        "url": "https://github.com/JC-Flanders/als.git",
+        "ref": "main"
       },
       "policy": {
         "installation": "AVAILABLE",
