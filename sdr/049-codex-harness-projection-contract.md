@@ -12,11 +12,11 @@ Accepted
 
 ## Decision
 
-- ALS has two harness targets: `claude` and `codex`.
+- ALS has registered harness targets. The current supported targets are `claude` and `codex`.
 - `alsc deploy claude` remains the Claude projection command.
 - `alsc deploy codex` is the Codex projection command.
 - Claude projection writes generated skills to `.claude/skills`, Delamain runtime bundles to `.claude/delamains`, and system guidance to `.als/CLAUDE.md`.
-- Codex projection writes generated skills to `.agents/skills`, Delamain runtime bundles to `.codex/als/delamains`, and system guidance to `.als/AGENTS.md`.
+- Codex projection writes generated skills to `.agents/skills`, Delamain runtime bundles to `.codex/delamains`, and system guidance to `.als/AGENTS.md`.
 - Codex plugin packaging uses `.codex-plugin/plugin.json`, bundled skills through `skills`, and bundled lifecycle config through `hooks/codex-hooks.json`.
 - The canonical ALS plugin root environment variable is `ALS_PLUGIN_ROOT`. `CLAUDE_PLUGIN_ROOT` is accepted as a Claude compatibility alias.
 
@@ -38,7 +38,7 @@ Accepted
 - `deploy claude` keeps the existing public output shape and paths.
 - `deploy codex` emits Codex paths and the `als-codex-deploy-output@1` schema.
 - Delamain runtime manifests may record the harness target.
-- Transient runtime hygiene must ignore equivalent Codex runtime files under `.codex/als`.
+- Transient runtime hygiene must ignore equivalent Codex runtime files under `.codex/delamains`.
 
 ## Docs and Fixture Impact
 

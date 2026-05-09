@@ -28,7 +28,7 @@ Never use bare platform codes without a link.
 
 ## Runtime detection
 
-Skills and tools that need to branch on platform should first identify the harness target: `claude` or `codex`.
+Skills and tools that need to branch on platform should first identify the registered harness target. The current supported targets are `claude` and `codex`.
 
 For Claude, read `$CLAUDE_CODE_ENTRYPOINT` and map to the corresponding code via the Runtime signal column above. Do not infer Claude platform from install-mode signals.
 

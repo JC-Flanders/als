@@ -14,6 +14,11 @@ import {
   toRepoRelative,
   toSystemRelative,
 } from "./system-paths.ts";
+import {
+  getHarnessRuntimeSpec,
+  type HarnessRuntimeSpec,
+  type HarnessTarget,
+} from "../../shared/harnesses.ts";
 import type {
   ClaudeDelamainNameConflict,
   ClaudeDelamainProjectionCollision,
@@ -32,18 +37,12 @@ export interface ClaudeSkillDeployOptions {
   require_empty_targets?: boolean;
 }
 
-export type HarnessTarget = "claude" | "codex";
-
-interface HarnessProjectionSpec {
-  target: HarnessTarget;
-  display_name: "Claude" | "Codex";
+interface HarnessProjectionSpec extends HarnessRuntimeSpec {
   deploy_output_schema: string;
-  generated_skill_root: string;
-  delamain_runtime_root: string;
-  system_instruction_path: string;
   system_instruction_kind: ClaudeSystemFilePlan["kind"];
   system_instruction_contents: string;
   target_collision_roots_label: string;
+  transform_projected_skill_text?: (value: string) => string;
 }
 
 interface ClaudeSkillProjectionWorkPlan extends ClaudeSkillProjectionPlan {
@@ -104,8 +103,6 @@ interface DelamainRuntimeManifestConfig {
 }
 
 const DELAMAIN_RUNTIME_MANIFEST_SCHEMA = "als-delamain-runtime-manifest@1";
-const ALS_SYSTEM_CLAUDE_MD_TARGET_PATH = ".als/CLAUDE.md";
-const ALS_SYSTEM_CODEX_AGENTS_MD_TARGET_PATH = ".als/AGENTS.md";
 const DELAMAIN_RUNTIME_MANIFEST_CONFIG = "runtime-manifest.config.json";
 const CANONICAL_DISPATCHER_TEMPLATE_DIR = resolve(
   import.meta.dir,
@@ -133,45 +130,38 @@ Do not manually add, edit, or remove files here. Make changes through ALS skills
 
 This directory contains ALS definitions, including shapes, Delamain bundles, skill definitions, and migration bundles.
 
-The compiler reads from \`.als/\` and projects Codex runtime assets into \`.agents/\` and \`.codex/als/\`.
+The compiler reads from \`.als/\` and projects Codex runtime assets into \`.agents/\` and \`.codex/\`.
 
 Customize the system through ALS skills, not by editing \`.als/\` files directly.
 `;
 
 const HARNESS_PROJECTION_SPECS: Record<HarnessTarget, HarnessProjectionSpec> = {
   claude: {
-    target: "claude",
-    display_name: "Claude",
+    ...getHarnessRuntimeSpec("claude"),
     deploy_output_schema: DEPLOY_OUTPUT_SCHEMA_LITERAL,
-    generated_skill_root: ".claude/skills",
-    delamain_runtime_root: ".claude/delamains",
-    system_instruction_path: ALS_SYSTEM_CLAUDE_MD_TARGET_PATH,
     system_instruction_kind: "generated_claude_guidance",
     system_instruction_contents: ALS_SYSTEM_CLAUDE_MD_CONTENTS,
     target_collision_roots_label: ".claude/skills or .claude/delamains",
   },
   codex: {
-    target: "codex",
-    display_name: "Codex",
+    ...getHarnessRuntimeSpec("codex"),
     deploy_output_schema: "als-codex-deploy-output@1",
-    generated_skill_root: ".agents/skills",
-    delamain_runtime_root: ".codex/als/delamains",
-    system_instruction_path: ALS_SYSTEM_CODEX_AGENTS_MD_TARGET_PATH,
     system_instruction_kind: "generated_codex_guidance",
     system_instruction_contents: ALS_SYSTEM_CODEX_AGENTS_MD_CONTENTS,
-    target_collision_roots_label: ".agents/skills or .codex/als/delamains",
+    target_collision_roots_label: ".agents/skills or .codex/delamains",
+    transform_projected_skill_text: rewriteCodexProjectedSkillText,
   },
 };
 
 export function deployClaudeSkills(systemRootInput: string, options: ClaudeSkillDeployOptions = {}): ClaudeSkillDeployOutput {
-  return deployHarnessSkills("claude", systemRootInput, options);
+  return deployHarnessProjection("claude", systemRootInput, options);
 }
 
 export function deployCodexSkills(systemRootInput: string, options: ClaudeSkillDeployOptions = {}): ClaudeSkillDeployOutput {
-  return deployHarnessSkills("codex", systemRootInput, options);
+  return deployHarnessProjection("codex", systemRootInput, options);
 }
 
-export function deployHarnessSkills(
+export function deployHarnessProjection(
   target: HarnessTarget,
   systemRootInput: string,
   options: ClaudeSkillDeployOptions = {},
@@ -222,7 +212,7 @@ export function deployHarnessSkills(
     );
   }
 
-  return deployHarnessSkillsFromConfig(target, systemRootAbs, systemConfig, initialValidation.status, options);
+  return deployHarnessProjectionFromConfig(target, systemRootAbs, systemConfig, initialValidation.status, options);
 }
 
 export function deployClaudeSkillsFromConfig(
@@ -231,7 +221,7 @@ export function deployClaudeSkillsFromConfig(
   validationStatus: ClaudeSkillDeployProceedStatus,
   options: ClaudeSkillDeployOptions = {},
 ): ClaudeSkillDeployOutput {
-  return deployHarnessSkillsFromConfig("claude", systemRootInput, systemConfig, validationStatus, options);
+  return deployHarnessProjectionFromConfig("claude", systemRootInput, systemConfig, validationStatus, options);
 }
 
 export function deployCodexSkillsFromConfig(
@@ -240,10 +230,10 @@ export function deployCodexSkillsFromConfig(
   validationStatus: ClaudeSkillDeployProceedStatus,
   options: ClaudeSkillDeployOptions = {},
 ): ClaudeSkillDeployOutput {
-  return deployHarnessSkillsFromConfig("codex", systemRootInput, systemConfig, validationStatus, options);
+  return deployHarnessProjectionFromConfig("codex", systemRootInput, systemConfig, validationStatus, options);
 }
 
-export function deployHarnessSkillsFromConfig(
+export function deployHarnessProjectionFromConfig(
   target: HarnessTarget,
   systemRootInput: string,
   systemConfig: SystemConfig,
@@ -962,18 +952,21 @@ function overwriteSkillProjectionDirectory(
   spec: HarnessProjectionSpec,
 ): void {
   overwriteProjectionDirectory(sourceDirAbs, targetDirAbs);
-  if (spec.target !== "codex") {
+  if (!spec.transform_projected_skill_text) {
     return;
   }
 
-  rewriteCodexProjectedSkillDirectory(targetDirAbs);
+  rewriteProjectedSkillDirectory(targetDirAbs, spec.transform_projected_skill_text);
 }
 
-function rewriteCodexProjectedSkillDirectory(dirAbs: string): void {
+function rewriteProjectedSkillDirectory(
+  dirAbs: string,
+  transform: (value: string) => string,
+): void {
   for (const entry of readdirSync(dirAbs, { withFileTypes: true })) {
     const pathAbs = resolve(dirAbs, entry.name);
     if (entry.isDirectory()) {
-      rewriteCodexProjectedSkillDirectory(pathAbs);
+      rewriteProjectedSkillDirectory(pathAbs, transform);
       continue;
     }
 
@@ -982,7 +975,7 @@ function rewriteCodexProjectedSkillDirectory(dirAbs: string): void {
     }
 
     const current = readFileSync(pathAbs, "utf-8");
-    const rewritten = rewriteCodexProjectedSkillText(current);
+    const rewritten = transform(current);
     if (rewritten !== current) {
       writeFileSync(pathAbs, rewritten, "utf-8");
     }
@@ -1322,7 +1315,7 @@ function buildFailureOutput(
   dryRun: boolean,
   requireEmptyTargets: boolean,
   error: string,
-  spec: HarnessProjectionSpec = HARNESS_PROJECTION_SPECS.claude,
+  spec: HarnessProjectionSpec,
 ): ClaudeSkillDeployOutput {
   return buildDeployOutput({
     spec,

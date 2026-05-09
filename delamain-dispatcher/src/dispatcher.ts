@@ -16,6 +16,7 @@ import type { AgentProvider } from "./provider.js";
 import { buildSessionRuntimeState, shouldPersistDispatcherSession } from "./session-runtime.js";
 import { recoverFreshDispatchAfterMissingResumeSession } from "./resume-recovery.js";
 import { loadRuntimeManifest } from "./runtime-manifest.js";
+import type { HarnessTarget } from "./harness-runtime.js";
 import {
   appendTelemetryEvent,
   DISPATCH_TELEMETRY_SCHEMA,
@@ -73,7 +74,7 @@ export interface DispatchEntry {
 
 export interface ResolvedConfig {
   systemRoot: string;
-  harness?: "claude" | "codex";
+  harness?: HarnessTarget;
   moduleId: string;
   moduleRoot: string;
   entityName: string;

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { readdir, rm, stat } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { deployClaudeSkills } from "../../compiler/src/claude-skills.ts";
+import { deployClaudeSkills } from "../../compiler/src/harness-projection.ts";
 import type { ConstructFailureState } from "../../compiler/src/construct-contracts.ts";
 import type { ConstructActionManifest } from "../../compiler/src/construct-upgrade.ts";
 import {

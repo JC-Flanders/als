@@ -130,7 +130,7 @@ export interface ClaudeDelamainProjectionCollision {
 }
 
 export interface ClaudeSystemFilePlan {
-  kind: "generated_claude_guidance" | "generated_codex_guidance";
+  kind: string;
   target_path: string;
 }
 

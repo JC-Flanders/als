@@ -7,7 +7,7 @@ import {
   ALS_SYSTEM_CLAUDE_MD_CONTENTS,
   ALS_SYSTEM_CODEX_AGENTS_MD_CONTENTS,
   deployClaudeSkillsFromConfig,
-} from "../src/claude-skills.ts";
+} from "../src/harness-projection.ts";
 import { loadSystemValidationContext } from "../src/validate.ts";
 import {
   removePath,
@@ -201,7 +201,7 @@ test("deploy CLI dry-run reports planned work without creating .claude/skills", 
 test("deploy CLI dry-run reports Codex projection paths", { timeout: 180_000 }, async () => {
   await withFixtureSandbox("deploy-cli-codex-dry-run", async ({ root }) => {
     await rm(join(root, ".agents/skills"), { recursive: true, force: true });
-    await rm(join(root, ".codex/als/delamains"), { recursive: true, force: true });
+    await rm(join(root, ".codex/delamains"), { recursive: true, force: true });
 
     const process = Bun.spawnSync({
       cmd: ["bun", "src/cli.ts", "deploy", "codex", "--dry-run", root, "factory"],
@@ -233,21 +233,21 @@ test("deploy CLI dry-run reports Codex projection paths", { timeout: 180_000 }, 
       ".agents/skills/factory-operate",
     ]);
     expect(output.planned_delamains.map((plan) => plan.target_dir)).toEqual([
-      ".codex/als/delamains/development-pipeline",
+      ".codex/delamains/development-pipeline",
     ]);
     expect(output.written_system_file_count).toBe(0);
     expect(output.written_skill_count).toBe(0);
     expect(output.written_delamain_count).toBe(0);
     expect(existsSync(join(root, ".als/AGENTS.md"))).toBe(false);
     expect(existsSync(join(root, ".agents/skills"))).toBe(false);
-    expect(existsSync(join(root, ".codex/als/delamains"))).toBe(false);
+    expect(existsSync(join(root, ".codex/delamains"))).toBe(false);
   });
 });
 
 test("deploy CLI projects Codex skills, guidance, and Delamain runtime", { timeout: 180_000 }, async () => {
   await withFixtureSandbox("deploy-cli-codex-live", async ({ root }) => {
     await rm(join(root, ".agents/skills"), { recursive: true, force: true });
-    await rm(join(root, ".codex/als/delamains"), { recursive: true, force: true });
+    await rm(join(root, ".codex/delamains"), { recursive: true, force: true });
     await rm(join(root, ".claude/skills"), { recursive: true, force: true });
     await rm(join(root, ".claude/delamains"), { recursive: true, force: true });
 
@@ -274,7 +274,7 @@ test("deploy CLI projects Codex skills, guidance, and Delamain runtime", { timeo
     expect(skill).toContain("name: factory-operate");
     expect(skill).not.toContain("CLAUDE_PLUGIN_ROOT");
     const manifest = readFileSync(
-      join(root, ".codex/als/delamains/development-pipeline/runtime-manifest.json"),
+      join(root, ".codex/delamains/development-pipeline/runtime-manifest.json"),
       "utf-8",
     );
     expect(manifest).toContain("\"harness\": \"codex\"");

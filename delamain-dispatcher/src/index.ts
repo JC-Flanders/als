@@ -19,6 +19,11 @@ import { formatDispatcherVersionLine, loadDispatcherVersionInfo } from "./dispat
 import { appendTelemetryEvent, DISPATCH_TELEMETRY_SCHEMA } from "./telemetry.js";
 import { createDrainControlPlane, type DrainControlPlane } from "./drain-control.js";
 import { scan } from "./watcher.js";
+import {
+  delamainRuntimeRootForHarness,
+  inferHarnessFromBundleRoot,
+  type HarnessTarget,
+} from "./harness-runtime.js";
 
 function findSystemRoot(start: string): string {
   let dir = start;
@@ -95,20 +100,20 @@ const DRAIN_REQUEST_FILE = join(
 
 function resolveDelamainsRoot(
   bundleRoot: string,
-  harness: "claude" | "codex" | undefined,
+  harness: HarnessTarget | undefined,
 ): string {
-  if (harness === "codex") {
-    return ".codex/als/delamains";
-  }
-  if (harness === "claude") {
-    return ".claude/delamains";
+  if (harness) {
+    return delamainRuntimeRootForHarness(harness);
   }
 
-  const normalized = bundleRoot.replace(/\\/g, "/");
-  if (normalized.includes("/.codex/als/delamains/")) {
-    return ".codex/als/delamains";
+  const inferredHarness = inferHarnessFromBundleRoot(bundleRoot);
+  if (inferredHarness) {
+    return delamainRuntimeRootForHarness(inferredHarness);
   }
-  return ".claude/delamains";
+
+  throw new Error(
+    `Unable to resolve Delamain runtime root for bundle '${bundleRoot}': runtime-manifest.json must declare a registered harness`,
+  );
 }
 
 type DispatcherLifecycleMode = "running" | "draining";

@@ -431,7 +431,7 @@ test("alsc deploy codex dry-run exposes the Codex deploy surface", async () => {
       ".agents/skills/factory-operate",
     ]);
     expect(output.planned_delamains.map((plan) => plan.target_dir)).toEqual([
-      ".codex/als/delamains/development-pipeline",
+      ".codex/delamains/development-pipeline",
     ]);
   });
 });

@@ -2,11 +2,16 @@
 
 import { resolve } from "node:path";
 import { inspectChangelogFile } from "./changelog.ts";
-import { deployClaudeSkills, deployCodexSkills, type HarnessTarget } from "./claude-skills.ts";
+import { deployHarnessProjection } from "./harness-projection.ts";
 import {
   inspectConstructActionManifest,
   inspectConstructManifest,
 } from "./construct-upgrade.ts";
+import {
+  formatHarnessTargetList,
+  parseHarnessTarget,
+  type HarnessTarget,
+} from "../../shared/harnesses.ts";
 import { inspectLanguageUpgradeRecipe } from "./language-upgrade-recipe.ts";
 import {
   buildOperatorConfigSessionStartOutput,
@@ -18,7 +23,7 @@ import { validateSystem } from "./validate.ts";
 
 const MAIN_USAGE = `Usage:
   alsc validate <system-root> [module-id]
-  alsc deploy <claude|codex> [--dry-run] [--require-empty-targets] <system-root> [module-id]
+  alsc deploy <${formatHarnessTargetList()}> [--dry-run] [--require-empty-targets] <system-root> [module-id]
   alsc upgrade-recipe inspect <recipe-path>
   alsc construct inspect <construct-path>
   alsc construct inspect-action <action-manifest-path>
@@ -39,7 +44,7 @@ Commands:
 `;
 
 const VALIDATE_USAGE = "Usage: alsc validate <system-root> [module-id]";
-const DEPLOY_USAGE = "Usage: alsc deploy <claude|codex> [--dry-run] [--require-empty-targets] <system-root> [module-id]";
+const DEPLOY_USAGE = `Usage: alsc deploy <${formatHarnessTargetList()}> [--dry-run] [--require-empty-targets] <system-root> [module-id]`;
 const UPGRADE_RECIPE_USAGE = "Usage: alsc upgrade-recipe inspect <recipe-path>";
 const CONSTRUCT_USAGE = `Usage:
   alsc construct inspect <construct-path>
@@ -229,12 +234,13 @@ function runDeployCommand(args: string[], io: CliIo): number {
   }
 
   const [target, ...rest] = args;
-  if (target !== "claude" && target !== "codex") {
+  const parsedTarget = parseHarnessTarget(target);
+  if (!parsedTarget) {
     writeStderr(io, `${DEPLOY_USAGE}\n`);
     return 2;
   }
 
-  return runDeployTargetCommand(target, rest, io);
+  return runDeployTargetCommand(parsedTarget, rest, io);
 }
 
 function runOperatorConfigCommand(
@@ -332,8 +338,7 @@ function runDeployTargetCommand(target: HarnessTarget, args: string[], io: CliIo
     return 2;
   }
 
-  const deploy = target === "claude" ? deployClaudeSkills : deployCodexSkills;
-  const result = deploy(resolve(positionals[0]), {
+  const result = deployHarnessProjection(target, resolve(positionals[0]), {
     dry_run: dryRun,
     module_filter: positionals[1] ?? undefined,
     require_empty_targets: requireEmptyTargets,

@@ -3,7 +3,7 @@ import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/pr
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { deployClaudeSkills } from "../../compiler/src/claude-skills.ts";
+import { deployClaudeSkills } from "../../compiler/src/harness-projection.ts";
 import { TRANSIENT_RUNTIME_GITIGNORE_PATTERNS } from "../../shared/transient-runtime.ts";
 import type { LanguageUpgradeRecipe } from "../../compiler/src/types.ts";
 import type { PlannedLanguageUpgradeHop } from "../../upgrade-language/src/plan-chain.ts";
@@ -571,6 +571,10 @@ async function seedTrackedTransientRuntimeFiles(repoRoot: string): Promise<strin
     ".claude/scripts/.cache/pulse/meta.json": "{\"pid\":123}\n",
     ".claude/delamains/ops/telemetry/events.jsonl": "{\"event\":\"tick\"}\n",
     ".claude/delamains/ops/dispatcher/control/drain-request.json": "{\"requested\":true}\n",
+    ".codex/delamains/ops/runtime/worktree-state.json": "{\"dirty\":false}\n",
+    ".codex/delamains/ops/status.json": "{\"pid\":789}\n",
+    ".codex/delamains/ops/telemetry/events.jsonl": "{\"event\":\"tick\"}\n",
+    ".codex/delamains/ops/dispatcher/control/drain-request.json": "{\"requested\":true}\n",
   };
 
   for (const [relativePath, contents] of Object.entries(files)) {
