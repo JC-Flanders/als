@@ -411,7 +411,7 @@ The longer-form preview contract lives in [RESEARCH-PREVIEW.md](RESEARCH-PREVIEW
 
 ```text
 alsc/
-  compiler/       # Validator and Claude skill projector
+  compiler/       # Validator and harness asset projector
   skills/         # ALS skill definitions and workflow material
 sdr/              # Spec Decision Records
 reference-system/ # Canonical reference fixture
