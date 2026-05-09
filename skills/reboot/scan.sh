@@ -2,44 +2,16 @@
 # Fast scan: find offline delamains for /reboot
 # Outputs only what's needed — no config, no formatting frills
 
-sys_root="$(pwd)"
-while [[ "$sys_root" != "/" ]]; do
-    [[ -f "$sys_root/.als/system.ts" ]] && break
-    sys_root=$(dirname "$sys_root")
-done
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/runtime-env.sh"
 
-if [[ ! -f "$sys_root/.als/system.ts" ]]; then
-    echo "NO_SYSTEM"
+if ! als_runtime_init_env "${ALS_HARNESS:-${1:-}}" "$(pwd)"; then
+    echo "$ALS_RUNTIME_ERROR"
     exit 0
 fi
 
-echo "SYSTEM_ROOT: $sys_root"
-
-harness="${ALS_HARNESS:-${1:-}}"
-case "$harness" in
-    claude)
-        delamains_root="$sys_root/.claude/delamains"
-        ;;
-    codex)
-        delamains_root="$sys_root/.codex/delamains"
-        ;;
-    "")
-        if [[ -d "$sys_root/.codex/delamains" && ! -d "$sys_root/.claude/delamains" ]]; then
-            harness="codex"
-            delamains_root="$sys_root/.codex/delamains"
-        else
-            harness="claude"
-            delamains_root="$sys_root/.claude/delamains"
-        fi
-        ;;
-    *)
-        echo "UNKNOWN_HARNESS: $harness"
-        exit 0
-        ;;
-esac
-
-echo "HARNESS: $harness"
-echo "DELAMAINS_ROOT: $delamains_root"
+delamains_root="$DELAMAINS_ROOT"
+als_runtime_emit_env
 
 if [[ ! -d "$delamains_root" ]]; then
     echo "NO_DELAMAINS"

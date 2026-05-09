@@ -1,6 +1,6 @@
 ---
 name: update
-description: Update the installed ALS plugin to the latest version published in whichever marketplace it was installed from, then run the post-install language-upgrade and construct-upgrade phases that ALS-066 and ALS-067 require. Self-detects channel (RC `als-marketplace` for architects, stable `als-marketplace-stable` for edgerunners) via `${CLAUDE_PLUGIN_ROOT}`, refreshes the right marketplace clone, shells out to `claude plugin update als@<marketplace> --scope <scope>`, and orchestrates the staged upgrade follow-through. Output is verbose by design — useful for architect UAT (`/copy` paste into a release report) and edgerunner support (full diagnostic context).
+description: Update the installed ALS plugin to the latest version published in whichever marketplace it was installed from, then run the post-install language-upgrade and construct-upgrade phases that ALS-066 and ALS-067 require. Self-detects channel (RC `als-marketplace` for architects, stable `als-marketplace-stable` for edgerunners) from the ALS plugin root, refreshes the right marketplace clone, shells out to `claude plugin update als@<marketplace> --scope <scope>`, and orchestrates the staged upgrade follow-through. Output is verbose by design — useful for architect UAT (`/copy` paste into a release report) and edgerunner support (full diagnostic context).
 allowed-tools: AskUserQuestion, Bash, Read
 ---
 
@@ -11,7 +11,7 @@ Move the installed ALS plugin from whatever version the operator is currently on
 - **`als-marketplace`** (RC channel) — what architects install for pre-release testing. Source: `nfrith/als` repo at default ref (`main`).
 - **`als-marketplace-stable`** (stable channel) — what edgerunners install for production use. Source: `https://github.com/nfrith/als-stable`, a thin catalog repo that points at `nfrith/als` at ref `stable`.
 
-This skill detects which channel the operator is on (via `${CLAUDE_PLUGIN_ROOT}`) and updates within that channel. It does not switch channels — channel switching is a separate operator-driven action (uninstall + reinstall from the other marketplace).
+This skill detects which channel the operator is on from `${ALS_PLUGIN_ROOT}` and updates within that channel. It does not switch channels — channel switching is a separate operator-driven action (uninstall + reinstall from the other marketplace).
 
 ## Output discipline
 
@@ -22,11 +22,14 @@ The skill's output is intentionally verbose. Two audiences depend on the detail:
 
 Each phase below specifies what to surface. Do not condense or summarize away the diagnostic details.
 
-## Phase 1: Detect platform
+## Phase 1: Detect platform and runtime
 
 ```bash
+bash {skill-dir}/../lib/runtime-env.sh plugin
 echo "ENTRYPOINT=${CLAUDE_CODE_ENTRYPOINT:-unknown}"
 ```
+
+Extract `ALS_PLUGIN_ROOT`, `HARNESS`, `ALS_PLUGIN_MANIFEST_PATH`, and `ALS_MARKETPLACE_MANIFEST_PATH` from the runtime output.
 
 Map per [`platforms.md`](../docs/references/platforms.md):
 
@@ -38,14 +41,34 @@ Map per [`platforms.md`](../docs/references/platforms.md):
 **Surface:**
 - `Platform: <code> (<human name>)`
 - `Entrypoint: <raw $CLAUDE_CODE_ENTRYPOINT value>`
+- `Harness: <claude | codex>`
+- `ALS_PLUGIN_ROOT: <full path>`
 - One sentence on what restart-required means for this platform (Desktop: full session restart; CLI: new `claude` invocation)
 
 ## Phase 2: Detect own channel, version, scope
 
 ```bash
-echo "CLAUDE_PLUGIN_ROOT=${CLAUDE_PLUGIN_ROOT}"
-MARKETPLACE=$(echo "${CLAUDE_PLUGIN_ROOT}" | sed 's|.*/cache/||;s|/als/.*||')
+echo "ALS_PLUGIN_ROOT=${ALS_PLUGIN_ROOT}"
+echo "HARNESS=${HARNESS}"
+echo "ALS_PLUGIN_MANIFEST_PATH=${ALS_PLUGIN_MANIFEST_PATH}"
+echo "ALS_MARKETPLACE_MANIFEST_PATH=${ALS_MARKETPLACE_MANIFEST_PATH}"
+PLUGIN_MANIFEST_VERSION=$(jq -r '.version // empty' "${ALS_PLUGIN_MANIFEST_PATH}" 2>/dev/null)
+MARKETPLACE_MANIFEST_NAME=$(jq -r '.name // empty' "${ALS_MARKETPLACE_MANIFEST_PATH}" 2>/dev/null)
+echo "Manifest version: $PLUGIN_MANIFEST_VERSION"
+echo "Marketplace manifest name: $MARKETPLACE_MANIFEST_NAME"
+case "${ALS_PLUGIN_ROOT}" in
+  */cache/*/als/*)
+    MARKETPLACE=$(echo "${ALS_PLUGIN_ROOT}" | sed 's|.*/cache/||;s|/als/.*||')
+    ;;
+  *)
+    MARKETPLACE="$MARKETPLACE_MANIFEST_NAME"
+    ;;
+esac
 echo "Marketplace: $MARKETPLACE"
+if [ -z "$MARKETPLACE" ]; then
+  echo "MARKETPLACE_MISSING: could not resolve marketplace from ALS_PLUGIN_ROOT or ALS_MARKETPLACE_MANIFEST_PATH"
+  exit 1
+fi
 KEY="als@$MARKETPLACE"
 echo "Lookup key: $KEY"
 
@@ -67,13 +90,21 @@ if [ "$MATCH_COUNT" -gt 1 ]; then
 fi
 
 ACTIVE=$(jq '.[0]' <<<"$MATCHES")
+ACTIVE_INSTALL_PATH=$(jq -r '.installPath // empty' <<<"$ACTIVE")
+if [ -n "$ACTIVE_INSTALL_PATH" ] && [ "$ACTIVE_INSTALL_PATH" != "$ALS_PLUGIN_ROOT" ]; then
+  echo "INSTALL_PATH_MISMATCH: installed_plugins.json matched $KEY, but installPath=$ACTIVE_INSTALL_PATH does not match ALS_PLUGIN_ROOT=$ALS_PLUGIN_ROOT"
+  exit 1
+fi
 jq '.' <<<"$ACTIVE"
 ```
 
-The jq read must select the active record for this session: user-scope records match unconditionally; project-scope records only match when `projectPath == $PWD`. The final `ACTIVE` object is the full installed entry (version, scope, installPath, gitCommitSha, installedAt, lastUpdated, `projectPath` if project-scope).
+The jq read must select the active record for this session: user-scope records match unconditionally; project-scope records only match when `projectPath == $PWD`, and `installPath` must match `${ALS_PLUGIN_ROOT}` when present. The final `ACTIVE` object is the full installed entry (version, scope, installPath, gitCommitSha, installedAt, lastUpdated, `projectPath` if project-scope).
 
 **Surface:**
-- `CLAUDE_PLUGIN_ROOT: <full path>` — proves which cache the running skill came from
+- `ALS_PLUGIN_ROOT: <full path>` — proves which cache the running skill came from
+- `HARNESS: <claude | codex>` — controls runtime follow-through projection
+- `ALS_PLUGIN_MANIFEST_PATH: <full path>`
+- `Manifest version: <version from plugin.json>`
 - `Marketplace: <name>` (`als-marketplace` or `als-marketplace-stable`)
 - `Channel: <RC | stable>` (derived from marketplace name)
 - `Lookup key: <key>` — the JSON path queried
@@ -86,6 +117,7 @@ If the filtered read returns zero matches: explain that the running ALS install 
 
 ```bash
 claude plugin marketplace update "$MARKETPLACE" 2>&1
+MARKETPLACE_ROOT="$HOME/.claude/plugins/marketplaces/$MARKETPLACE"
 ```
 
 This is the actual command — surface its full output. If it fails, the error message is what support needs.
@@ -94,11 +126,11 @@ After refresh, read the latest version. Try in this order:
 
 ```bash
 # RC source (plugin source = "./") — plugin.json lives in the marketplace clone
-jq -r '.version // empty' ~/.claude/plugins/marketplaces/$MARKETPLACE/.claude-plugin/plugin.json 2>/dev/null
+jq -r '.version // empty' "$MARKETPLACE_ROOT/.claude-plugin/plugin.json" 2>/dev/null
 
 # Stable source (plugin source = github/url with ref) — fetch plugin.json from the source URL
-SOURCE_URL=$(jq -r '.plugins[0].source.url // .plugins[0].source.repo // empty' ~/.claude/plugins/marketplaces/$MARKETPLACE/.claude-plugin/marketplace.json)
-SOURCE_REF=$(jq -r '.plugins[0].source.ref // "main"' ~/.claude/plugins/marketplaces/$MARKETPLACE/.claude-plugin/marketplace.json)
+SOURCE_URL=$(jq -r '.plugins[0].source.url // .plugins[0].source.repo // empty' "$MARKETPLACE_ROOT/.claude-plugin/marketplace.json")
+SOURCE_REF=$(jq -r '.plugins[0].source.ref // "main"' "$MARKETPLACE_ROOT/.claude-plugin/marketplace.json")
 # Convert https://github.com/owner/repo.git → owner/repo, or owner/repo (already)
 REPO=$(echo "$SOURCE_URL" | sed 's|https://github.com/||;s|\.git$||')
 curl -sL "https://raw.githubusercontent.com/$REPO/$SOURCE_REF/.claude-plugin/plugin.json" | jq -r '.version // empty' 2>/dev/null
@@ -131,7 +163,14 @@ if [ "$MATCH_COUNT" -gt 1 ]; then
   exit 1
 fi
 
-SCOPE=$(jq -r '.[0].scope' <<<"$MATCHES")
+ACTIVE=$(jq '.[0]' <<<"$MATCHES")
+ACTIVE_INSTALL_PATH=$(jq -r '.installPath // empty' <<<"$ACTIVE")
+if [ -n "$ACTIVE_INSTALL_PATH" ] && [ "$ACTIVE_INSTALL_PATH" != "$ALS_PLUGIN_ROOT" ]; then
+  echo "INSTALL_PATH_MISMATCH: installed_plugins.json matched $KEY, but installPath=$ACTIVE_INSTALL_PATH does not match ALS_PLUGIN_ROOT=$ALS_PLUGIN_ROOT"
+  exit 1
+fi
+
+SCOPE=$(jq -r '.scope' <<<"$ACTIVE")
 claude plugin update "$KEY" --scope "$SCOPE" 2>&1
 ```
 
@@ -177,27 +216,35 @@ Read the full entry again — version, gitCommitSha, lastUpdated should all refl
 
 ## Phase 6: Upgrade runtime surfaces
 
-After the plugin update is verified, drive runtime follow-through through the transaction-wrapper CLI at `${CLAUDE_PLUGIN_ROOT}/alsc/update-transaction/src/cli.ts`. The CLI is the operator-reachable adapter for [SDR 039](../../sdr/039-update-transaction-wrapper-contract.md); the SDR still owns the semantics.
+After the plugin update is verified, drive runtime follow-through through the transaction-wrapper CLI at `${ALS_PLUGIN_ROOT}/alsc/update-transaction/src/cli.ts`. The CLI is the operator-reachable adapter for [SDR 039](../../sdr/039-update-transaction-wrapper-contract.md); the SDR still owns the semantics.
 
 1. Create temp files for the prepared payload, answer map, and final result.
 
 ```bash
-REPO_ROOT=$(git rev-parse --show-toplevel)
-SYSTEM_ROOT="$REPO_ROOT"
+bash {skill-dir}/../lib/runtime-env.sh ${HARNESS} "$(pwd)"
+```
+
+Extract `SYSTEM_ROOT` and `TRANSACTION_ROOTS` from the runtime output. If the output is `NO_SYSTEM`, skip runtime follow-through and report `Runtime follow-through: skipped — no ALS system root found`.
+
+Then create temp files:
+
+```bash
+REPO_ROOT=$(git -C "${SYSTEM_ROOT}" rev-parse --show-toplevel)
 PREPARED_JSON=$(mktemp -t als-update-prepared.XXXXXX.json)
 ANSWERS_JSON=$(mktemp -t als-update-answers.XXXXXX.json)
 RESULT_JSON=$(mktemp -t als-update-result.XXXXXX.json)
 printf '{}\n' > "$ANSWERS_JSON"
 ```
 
-2. Prepare the transaction. Add `--target-als-version <N>` only if the operator asked to pin a specific ALS target. Without it, the CLI auto-discovers the latest reachable recipe chain under `${CLAUDE_PLUGIN_ROOT}/language-upgrades/recipes/`.
+2. Prepare the transaction. Add `--target-als-version <N>` only if the operator asked to pin a specific ALS target. Without it, the CLI auto-discovers the latest reachable recipe chain under `${ALS_PLUGIN_ROOT}/language-upgrades/recipes/`.
 
 ```bash
 set +e
-bun ${CLAUDE_PLUGIN_ROOT}/alsc/update-transaction/src/cli.ts prepare \
+bun ${ALS_PLUGIN_ROOT}/alsc/update-transaction/src/cli.ts prepare \
   --repo-root "$REPO_ROOT" \
   --system-root "$SYSTEM_ROOT" \
-  --plugin-root "${CLAUDE_PLUGIN_ROOT}" \
+  --plugin-root "${ALS_PLUGIN_ROOT}" \
+  --harness "${HARNESS}" \
   > "$PREPARED_JSON"
 PREPARE_EXIT=$?
 set -e
@@ -221,10 +268,10 @@ If `PREPARED_STATUS` is `blocked` or `PREPARE_EXIT` is non-zero, do not stop col
 For `reason: "dirty-live-tree"`:
 
 ```bash
-git -C "$REPO_ROOT" status --porcelain --untracked-files=no -- .als .claude
+git -C "$REPO_ROOT" status --porcelain --untracked-files=no -- ${TRANSACTION_ROOTS}
 ```
 
-- By the time this blocker surfaces, prepare has already auto-repaired the canonical transient-runtime taxonomy (`runtime/`, `status.json`, pulse cache JSON, telemetry `events.jsonl`, and dispatcher `drain-request.json`) if those were the only tracked `.claude/` offenders. Treat the remaining list as user-authored drift or other non-transient projected-state divergence.
+- By the time this blocker surfaces, prepare has already auto-repaired the canonical transient-runtime taxonomy (`runtime/`, `status.json`, pulse cache JSON, telemetry `events.jsonl`, and dispatcher `drain-request.json`) if those were the only tracked runtime offenders. Treat the remaining list as user-authored drift or other non-transient projected-state divergence.
 - Show the exact dirty path list in the AskUserQuestion body.
 - Offer these options:
   - `Commit the dirty files and proceed`
@@ -268,7 +315,7 @@ If any answer is a cancel or abort choice, stop before execute.
 
 ```bash
 set +e
-bun ${CLAUDE_PLUGIN_ROOT}/alsc/update-transaction/src/cli.ts execute \
+bun ${ALS_PLUGIN_ROOT}/alsc/update-transaction/src/cli.ts execute \
   --prepared-file "$PREPARED_JSON" \
   --answers-file "$ANSWERS_JSON" \
   > "$RESULT_JSON"
@@ -293,10 +340,12 @@ Surface a single, formatted summary block that captures the whole run. This is w
 ## ALS /update report
 
 - **Platform:** <code> (<human name>)
+- **Harness:** <claude | codex>
 - **Channel:** <RC | stable> (`<marketplace name>`)
 - **Scope:** <user | project>
 - **Marketplace clone path:** ~/.claude/plugins/marketplaces/<marketplace>/
 - **Plugin install path:** <installPath from installed_plugins.json>
+- **ALS plugin root:** <ALS_PLUGIN_ROOT>
 - **Version:** <old> → <new>  (or: <version> — no change)
 - **Git commit SHA:** <new gitCommitSha>
 - **Action taken:** <"Update applied" | "Already on latest, no action" | "Failed">
@@ -310,8 +359,8 @@ The architect uses `/copy` to grab this. Edgerunner support can read this and re
 
 ## Why this skill exists
 
-The CLI primitive `claude plugin update als@<marketplace> --scope <scope>` is the documented universal update path. It works the same way regardless of platform, scope, or channel. This skill packages that primitive into an in-session flow with channel self-detection, scope resolution, version readouts, verbose diagnostics, and verification — so the operator gets a guided experience and a complete release/support trail in one command.
+The CLI primitive `claude plugin update als@<marketplace> --scope <scope>` is the documented universal update path for Claude Code. It works the same way regardless of Claude Code platform, scope, or channel. This skill packages that primitive into an in-session flow with channel self-detection, scope resolution, version readouts, verbose diagnostics, and verification — so the operator gets a guided experience and a complete release/support trail in one command.
 
-Empirical history: Earlier (2026-04-28) iterations walked the operator through Claude Code Desktop's GUI Update button. That path was unreliable in user scope (button stayed greyed) and broken in project scope (button activated after Cmd+R refresh but apply step failed with a false "192 files modified" warning). The CLI primitive — invoked directly via Bash shellout — worked in both scopes once the `--scope` flag was passed correctly. Channels were added (2026-04-28) to give the architect a pre-release test surface (RC) without affecting edgerunners (stable). Channel self-detection via `${CLAUDE_PLUGIN_ROOT}` (also 2026-04-28) eliminated the need for any "single-install" testing rule on the architect's machine.
+Empirical history: Earlier (2026-04-28) iterations walked the operator through Claude Code Desktop's GUI Update button. That path was unreliable in user scope (button stayed greyed) and broken in project scope (button activated after Cmd+R refresh but apply step failed with a false "192 files modified" warning). The CLI primitive — invoked directly via Bash shellout — worked in both scopes once the `--scope` flag was passed correctly. Channels were added (2026-04-28) to give the architect a pre-release test surface (RC) without affecting edgerunners (stable). Channel self-detection via the ALS plugin root (also 2026-04-28) eliminated the need for any "single-install" testing rule on the architect's machine.
 
 The verbose-by-design output is for: (1) architect UAT — the architect runs this skill as part of release smoke tests and uses `/copy` to ship the full output into a release report; (2) edgerunner support — when something goes wrong, the edgerunner pastes the output and support sees the full diagnostic picture without follow-ups.
