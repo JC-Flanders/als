@@ -144,15 +144,32 @@ test("dispatcher version check rejects malformed local VERSION", async () => {
   });
 });
 
-test("dispatcher version check rejects missing CLAUDE_PLUGIN_ROOT", async () => {
+test("dispatcher version check rejects missing ALS plugin root", async () => {
   await withVersionSandbox("missing-plugin-root", async ({ root }) => {
     const bundleRoot = join(root, ".claude/delamains/version-check");
 
     await writeVersionPath(root, ".claude/delamains/version-check/dispatcher/VERSION", "1\n");
 
     await expect(loadDispatcherVersionInfo(bundleRoot, {})).rejects.toThrow(
-      "CLAUDE_PLUGIN_ROOT is not set; cannot read canonical dispatcher VERSION",
+      "ALS_PLUGIN_ROOT is not set; cannot read canonical dispatcher VERSION",
     );
+  });
+});
+
+test("dispatcher version check accepts ALS_PLUGIN_ROOT", async () => {
+  await withVersionSandbox("als-plugin-root", async ({ root }) => {
+    const bundleRoot = join(root, ".codex/als/delamains/version-check");
+    const pluginRoot = join(root, "plugin");
+
+    await writeVersionPath(root, ".codex/als/delamains/version-check/dispatcher/VERSION", "1\n");
+    await writeVersionPath(root, "plugin/delamain-dispatcher/VERSION", "2\n");
+
+    const info = await loadDispatcherVersionInfo(bundleRoot, {
+      ALS_PLUGIN_ROOT: pluginRoot,
+    });
+
+    expect(info.localVersion).toBe(1);
+    expect(info.latestVersion).toBe(2);
   });
 });
 

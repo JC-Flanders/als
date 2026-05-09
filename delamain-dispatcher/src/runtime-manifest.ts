@@ -4,6 +4,7 @@ import type { AgentProvider } from "./provider.js";
 
 export interface RuntimeManifest {
   schema: string;
+  harness?: "claude" | "codex";
   delamain_name: string;
   module_id: string;
   module_version: number;
@@ -123,6 +124,7 @@ export async function loadRuntimeManifest(bundleRoot: string): Promise<RuntimeMa
 
   return {
     schema: requireStringField(manifest, "schema"),
+    harness: manifest.harness === "codex" ? "codex" : manifest.harness === "claude" ? "claude" : undefined,
     delamain_name: requireStringField(manifest, "delamain_name"),
     module_id: requireStringField(manifest, "module_id"),
     module_version: manifest.module_version,

@@ -1,0 +1,20 @@
+{
+  "name": "als-local-marketplace",
+  "interface": {
+    "displayName": "ALS Local Marketplace"
+  },
+  "plugins": [
+    {
+      "name": "als",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

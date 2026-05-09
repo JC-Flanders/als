@@ -2,7 +2,7 @@
 
 import { resolve } from "node:path";
 import { inspectChangelogFile } from "./changelog.ts";
-import { deployClaudeSkills } from "./claude-skills.ts";
+import { deployClaudeSkills, deployCodexSkills, type HarnessTarget } from "./claude-skills.ts";
 import {
   inspectConstructActionManifest,
   inspectConstructManifest,
@@ -18,7 +18,7 @@ import { validateSystem } from "./validate.ts";
 
 const MAIN_USAGE = `Usage:
   alsc validate <system-root> [module-id]
-  alsc deploy claude [--dry-run] [--require-empty-targets] <system-root> [module-id]
+  alsc deploy <claude|codex> [--dry-run] [--require-empty-targets] <system-root> [module-id]
   alsc upgrade-recipe inspect <recipe-path>
   alsc construct inspect <construct-path>
   alsc construct inspect-action <action-manifest-path>
@@ -30,7 +30,7 @@ const MAIN_USAGE = `Usage:
 
 Commands:
   validate        Validate an ALS system and emit JSON.
-  deploy claude   Project active ALS Claude assets into .als/ and .claude/.
+  deploy          Project active ALS assets for a harness target.
   upgrade-recipe  Inspect language-upgrade-recipe bundles.
   construct       Inspect construct manifests and staged action manifests.
   changelog       Inspect ALS CHANGELOG.md structure and staged release entries.
@@ -39,7 +39,7 @@ Commands:
 `;
 
 const VALIDATE_USAGE = "Usage: alsc validate <system-root> [module-id]";
-const DEPLOY_USAGE = "Usage: alsc deploy claude [--dry-run] [--require-empty-targets] <system-root> [module-id]";
+const DEPLOY_USAGE = "Usage: alsc deploy <claude|codex> [--dry-run] [--require-empty-targets] <system-root> [module-id]";
 const UPGRADE_RECIPE_USAGE = "Usage: alsc upgrade-recipe inspect <recipe-path>";
 const CONSTRUCT_USAGE = `Usage:
   alsc construct inspect <construct-path>
@@ -229,12 +229,12 @@ function runDeployCommand(args: string[], io: CliIo): number {
   }
 
   const [target, ...rest] = args;
-  if (target !== "claude") {
+  if (target !== "claude" && target !== "codex") {
     writeStderr(io, `${DEPLOY_USAGE}\n`);
     return 2;
   }
 
-  return runDeployClaudeCommand(rest, io);
+  return runDeployTargetCommand(target, rest, io);
 }
 
 function runOperatorConfigCommand(
@@ -298,7 +298,7 @@ function runOperatorConfigCommand(
   return 2;
 }
 
-function runDeployClaudeCommand(args: string[], io: CliIo): number {
+function runDeployTargetCommand(target: HarnessTarget, args: string[], io: CliIo): number {
   if (args.length === 1 && isHelpFlag(args[0])) {
     writeStdout(io, `${DEPLOY_USAGE}\n`);
     return 0;
@@ -332,7 +332,8 @@ function runDeployClaudeCommand(args: string[], io: CliIo): number {
     return 2;
   }
 
-  const result = deployClaudeSkills(resolve(positionals[0]), {
+  const deploy = target === "claude" ? deployClaudeSkills : deployCodexSkills;
+  const result = deploy(resolve(positionals[0]), {
     dry_run: dryRun,
     module_filter: positionals[1] ?? undefined,
     require_empty_targets: requireEmptyTargets,

@@ -3,7 +3,11 @@ import { cp, mkdir, rm, writeFile } from "node:fs/promises";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ALS_SYSTEM_CLAUDE_MD_CONTENTS, deployClaudeSkillsFromConfig } from "../src/claude-skills.ts";
+import {
+  ALS_SYSTEM_CLAUDE_MD_CONTENTS,
+  ALS_SYSTEM_CODEX_AGENTS_MD_CONTENTS,
+  deployClaudeSkillsFromConfig,
+} from "../src/claude-skills.ts";
 import { loadSystemValidationContext } from "../src/validate.ts";
 import {
   removePath,
@@ -191,6 +195,91 @@ test("deploy CLI dry-run reports planned work without creating .claude/skills", 
       expect(plan).not.toHaveProperty("source_dir_abs");
       expect(plan).not.toHaveProperty("target_dir_abs");
     }
+  });
+});
+
+test("deploy CLI dry-run reports Codex projection paths", { timeout: 180_000 }, async () => {
+  await withFixtureSandbox("deploy-cli-codex-dry-run", async ({ root }) => {
+    await rm(join(root, ".agents/skills"), { recursive: true, force: true });
+    await rm(join(root, ".codex/als/delamains"), { recursive: true, force: true });
+
+    const process = Bun.spawnSync({
+      cmd: ["bun", "src/cli.ts", "deploy", "codex", "--dry-run", root, "factory"],
+      cwd: compilerRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(process.exitCode).toBe(0);
+    const output = JSON.parse(new TextDecoder().decode(process.stdout)) as {
+      schema: string;
+      status: string;
+      planned_system_files: Array<Record<string, unknown>>;
+      planned_skills: Array<{ target_dir: string }>;
+      planned_delamains: Array<{ target_dir: string }>;
+      written_system_file_count: number;
+      written_skill_count: number;
+      written_delamain_count: number;
+    };
+    expect(output.schema).toBe("als-codex-deploy-output@1");
+    expect(output.status).toBe("pass");
+    expect(output.planned_system_files).toEqual([
+      {
+        kind: "generated_codex_guidance",
+        target_path: ".als/AGENTS.md",
+      },
+    ]);
+    expect(output.planned_skills.map((plan) => plan.target_dir)).toEqual([
+      ".agents/skills/factory-operate",
+    ]);
+    expect(output.planned_delamains.map((plan) => plan.target_dir)).toEqual([
+      ".codex/als/delamains/development-pipeline",
+    ]);
+    expect(output.written_system_file_count).toBe(0);
+    expect(output.written_skill_count).toBe(0);
+    expect(output.written_delamain_count).toBe(0);
+    expect(existsSync(join(root, ".als/AGENTS.md"))).toBe(false);
+    expect(existsSync(join(root, ".agents/skills"))).toBe(false);
+    expect(existsSync(join(root, ".codex/als/delamains"))).toBe(false);
+  });
+});
+
+test("deploy CLI projects Codex skills, guidance, and Delamain runtime", { timeout: 180_000 }, async () => {
+  await withFixtureSandbox("deploy-cli-codex-live", async ({ root }) => {
+    await rm(join(root, ".agents/skills"), { recursive: true, force: true });
+    await rm(join(root, ".codex/als/delamains"), { recursive: true, force: true });
+    await rm(join(root, ".claude/skills"), { recursive: true, force: true });
+    await rm(join(root, ".claude/delamains"), { recursive: true, force: true });
+
+    const process = Bun.spawnSync({
+      cmd: ["bun", "src/cli.ts", "deploy", "codex", root, "factory"],
+      cwd: compilerRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(process.exitCode).toBe(0);
+    const output = JSON.parse(new TextDecoder().decode(process.stdout)) as {
+      status: string;
+      written_system_file_count: number;
+      written_skill_count: number;
+      written_delamain_count: number;
+    };
+    expect(output.status).toBe("pass");
+    expect(output.written_system_file_count).toBe(1);
+    expect(output.written_skill_count).toBe(1);
+    expect(output.written_delamain_count).toBe(1);
+    expect(readFileSync(join(root, ".als/AGENTS.md"), "utf-8")).toBe(ALS_SYSTEM_CODEX_AGENTS_MD_CONTENTS);
+    const skill = readFileSync(join(root, ".agents/skills/factory-operate/SKILL.md"), "utf-8");
+    expect(skill).toContain("name: factory-operate");
+    expect(skill).not.toContain("CLAUDE_PLUGIN_ROOT");
+    const manifest = readFileSync(
+      join(root, ".codex/als/delamains/development-pipeline/runtime-manifest.json"),
+      "utf-8",
+    );
+    expect(manifest).toContain("\"harness\": \"codex\"");
+    expect(manifest).toContain("\"delamain_name\": \"development-pipeline\"");
+    expect(existsSync(join(root, ".claude/skills/factory-operate"))).toBe(false);
   });
 });
 

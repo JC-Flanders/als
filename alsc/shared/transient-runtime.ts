@@ -27,10 +27,24 @@ export const TRANSIENT_RUNTIME_TAXONOMY: readonly TransientRuntimeRule[] = Objec
     },
   },
   {
+    id: "codex-dispatcher-runtime",
+    gitignore_pattern: ".codex/als/delamains/*/runtime/",
+    matches(path) {
+      return /^\.codex\/als\/delamains\/[^/]+\/runtime\/.+$/.test(path);
+    },
+  },
+  {
     id: "dispatcher-status",
     gitignore_pattern: ".claude/delamains/*/status.json",
     matches(path) {
       return /^\.claude\/delamains\/[^/]+\/status\.json$/.test(path);
+    },
+  },
+  {
+    id: "codex-dispatcher-status",
+    gitignore_pattern: ".codex/als/delamains/*/status.json",
+    matches(path) {
+      return /^\.codex\/als\/delamains\/[^/]+\/status\.json$/.test(path);
     },
   },
   {
@@ -41,6 +55,13 @@ export const TRANSIENT_RUNTIME_TAXONOMY: readonly TransientRuntimeRule[] = Objec
     },
   },
   {
+    id: "codex-pulse-cache",
+    gitignore_pattern: ".codex/als/scripts/.cache/pulse/*.json",
+    matches(path) {
+      return /^\.codex\/als\/scripts\/\.cache\/pulse\/[^/]+\.json$/.test(path);
+    },
+  },
+  {
     id: "dispatcher-telemetry",
     gitignore_pattern: ".claude/delamains/*/telemetry/events.jsonl",
     matches(path) {
@@ -48,10 +69,24 @@ export const TRANSIENT_RUNTIME_TAXONOMY: readonly TransientRuntimeRule[] = Objec
     },
   },
   {
+    id: "codex-dispatcher-telemetry",
+    gitignore_pattern: ".codex/als/delamains/*/telemetry/events.jsonl",
+    matches(path) {
+      return /^\.codex\/als\/delamains\/[^/]+\/telemetry\/events\.jsonl$/.test(path);
+    },
+  },
+  {
     id: "dispatcher-drain-control",
     gitignore_pattern: ".claude/delamains/*/dispatcher/control/drain-request.json",
     matches(path) {
       return /^\.claude\/delamains\/[^/]+\/dispatcher\/control\/drain-request\.json$/.test(path);
+    },
+  },
+  {
+    id: "codex-dispatcher-drain-control",
+    gitignore_pattern: ".codex/als/delamains/*/dispatcher/control/drain-request.json",
+    matches(path) {
+      return /^\.codex\/als\/delamains\/[^/]+\/dispatcher\/control\/drain-request\.json$/.test(path);
     },
   },
 ]);
@@ -66,7 +101,7 @@ export function isTransientRuntimePath(path: string): boolean {
 }
 
 export function listTrackedTransientRuntimePaths(repoRoot: string): string[] {
-  return splitNullSeparated(runGit(repoRoot, ["ls-files", "-z", "--", ".claude"]).stdout)
+  return splitNullSeparated(runGit(repoRoot, ["ls-files", "-z", "--", ".claude", ".codex/als"]).stdout)
     .map(normalizeRepoPath)
     .filter((path) => path.length > 0 && isTransientRuntimePath(path))
     .sort();

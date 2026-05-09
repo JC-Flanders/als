@@ -2,7 +2,7 @@
 
 # ALS — Agent Language Specification
 
-A model harness engineering SDK — built for Claude.
+A model harness engineering SDK — built for Claude and Codex.
 
 **Beta Research Preview**
 
@@ -16,7 +16,7 @@ Install from the stable marketplace, update with `/update`, and expect fix-forwa
 
 ## What ALS Is
 
-ALS is a model harness engineering SDK that bridges the interface between agent and operator. Built for the Claude platforms — Claude Code CLI, Claude Cowork, Claude Code Desktop, Claude Code Web — with a vision towards wearables and ambient computing.
+ALS is a model harness engineering SDK that bridges the interface between agent and operator. Built for Claude Code and Codex harnesses, with a vision towards wearables and ambient computing.
 
 We started building this long before "model harness engineering" existed as a term. Before open-source alternatives appeared. The problem was clear from the start: agent systems need a strict contract between the human operator and the agents working alongside them. Who owns which state? What does the operator see? What do agents handle autonomously? How does the system follow the operator across devices?
 
@@ -36,12 +36,13 @@ The current public preview is centered on two usable surfaces:
 
 - `alsc validate` validates an ALS system and emits machine-readable JSON
 - `alsc deploy claude` projects active ALS Claude assets into `.claude/skills/` and `.claude/delamains/`
+- `alsc deploy codex` projects active ALS Codex assets into `.agents/skills/` and `.codex/als/delamains/`
 - `alsc changelog inspect` validates the ALS repo's structured `CHANGELOG.md` staging area
 - `reference-system/` provides the canonical reference fixture for the current ALS v1 contract
 
 ## Install
 
-ALS is distributed as a Claude Code plugin. Requires [Bun](https://bun.sh) >= 1.3.0 and [jq](https://jqlang.github.io/jq/).
+ALS is distributed as a Claude Code plugin and now includes Codex plugin metadata for local Codex workflows. Requires [Bun](https://bun.sh) >= 1.3.0 and [jq](https://jqlang.github.io/jq/).
 
 ALS uses a **two-channel release model**:
 
@@ -72,6 +73,14 @@ claude plugin install als@als-marketplace
 Use only if you need the latest unreleased commits. Edgerunners should NOT use this channel — bumps land here first and may still need hotfixes before stable advances.
 
 Once installed, ALS skills (`/install`, `/new`, `/validate`, `/change`, `/migrate`, `/update`) are available inside Claude Code sessions.
+
+### Codex local plugin development
+
+This repo includes `.codex-plugin/plugin.json`, `hooks/codex-hooks.json`, and `.agents/plugins/marketplace.json` for Codex. Codex skills are invoked as `$install`, `$new`, `$validate`, `$change`, `$migrate`, and `$update`. The Codex projection path is:
+
+```bash
+bun alsc/compiler/src/cli.ts deploy codex <system-root>
+```
 
 ## Update
 
