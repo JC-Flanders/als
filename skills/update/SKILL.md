@@ -1,6 +1,6 @@
 ---
 name: update
-description: Update the installed ALS plugin to the latest version published in whichever marketplace it was installed from, then run the post-install language-upgrade and construct-upgrade phases that ALS-066 and ALS-067 require. Self-detects channel (RC `als-marketplace` for architects, stable `als-marketplace-stable` for edgerunners) from the ALS plugin root, refreshes the right marketplace clone, shells out to `claude plugin update als@<marketplace> --scope <scope>`, and orchestrates the staged upgrade follow-through. Output is verbose by design — useful for architect UAT (`/copy` paste into a release report) and edgerunner support (full diagnostic context).
+description: Update the installed ALS plugin to the latest version published in whichever marketplace it was installed from when the active harness exposes a plugin-update primitive, then run the post-install language-upgrade and construct-upgrade phases that ALS-066 and ALS-067 require. Claude self-update shells out to `claude plugin update als@<marketplace> --scope <scope>`. Codex self-update is not yet exposed here; Codex runs the runtime follow-through against the currently refreshed plugin root. Output is verbose by design — useful for architect UAT (`/copy` paste into a release report) and edgerunner support (full diagnostic context).
 allowed-tools: AskUserQuestion, Bash, Read
 ---
 
@@ -11,7 +11,7 @@ Move the installed ALS plugin from whatever version the operator is currently on
 - **`als-marketplace`** (RC channel) — what architects install for pre-release testing. Source: `nfrith/als` repo at default ref (`main`).
 - **`als-marketplace-stable`** (stable channel) — what edgerunners install for production use. Source: `https://github.com/nfrith/als-stable`, a thin catalog repo that points at `nfrith/als` at ref `stable`.
 
-This skill detects which channel the operator is on from `${ALS_PLUGIN_ROOT}` and updates within that channel. It does not switch channels — channel switching is a separate operator-driven action (uninstall + reinstall from the other marketplace).
+This skill detects which channel the operator is on from `${ALS_PLUGIN_ROOT}` and updates within that channel when the harness supports in-session self-update. It does not switch channels — channel switching is a separate operator-driven action (uninstall + reinstall from the other marketplace).
 
 ## Output discipline
 
@@ -26,30 +26,28 @@ Each phase below specifies what to surface. Do not condense or summarize away th
 
 ```bash
 bash {skill-dir}/../lib/runtime-env.sh plugin
-echo "ENTRYPOINT=${CLAUDE_CODE_ENTRYPOINT:-unknown}"
+echo "CLAUDE_ENTRYPOINT=${CLAUDE_CODE_ENTRYPOINT:-unknown}"
+echo "CODEX_THREAD_ID=${CODEX_THREAD_ID:+set}"
 ```
 
-Extract `ALS_PLUGIN_ROOT`, `HARNESS`, `ALS_PLUGIN_MANIFEST_PATH`, and `ALS_MARKETPLACE_MANIFEST_PATH` from the runtime output.
+Extract `ALS_PLUGIN_ROOT`, `HARNESS`, `ALS_PLATFORM_CODE`, `ALS_PLUGIN_MANIFEST_PATH`, and `ALS_MARKETPLACE_MANIFEST_PATH` from the runtime output.
 
-Map per [`platforms.md`](../docs/references/platforms.md):
-
-| Entrypoint | Platform code |
-|------------|---------------|
-| `cli` | [`ALS-PLAT-CCLI`](../docs/references/platforms.md) |
-| `claude-desktop` | [`ALS-PLAT-CDSK`](../docs/references/platforms.md) |
+Use `ALS_PLATFORM_CODE` when present. If it is empty, map per [`platforms.md`](../docs/references/platforms.md): `HARNESS=codex` maps to [`ALS-PLAT-CXCLI`](../docs/references/platforms.md), while `HARNESS=claude` maps `$CLAUDE_CODE_ENTRYPOINT` to the corresponding Claude platform code.
 
 **Surface:**
 - `Platform: <code> (<human name>)`
-- `Entrypoint: <raw $CLAUDE_CODE_ENTRYPOINT value>`
+- `Claude entrypoint: <raw $CLAUDE_CODE_ENTRYPOINT value>`
+- `Codex thread signal: <set | empty>`
 - `Harness: <claude | codex>`
 - `ALS_PLUGIN_ROOT: <full path>`
-- One sentence on what restart-required means for this platform (Desktop: full session restart; CLI: new `claude` invocation)
+- One sentence on what restart-required means for this platform (Desktop: full session restart; Claude CLI: new `claude` invocation; Codex CLI: new Codex invocation)
 
 ## Phase 2: Detect own channel, version, scope
 
 ```bash
 echo "ALS_PLUGIN_ROOT=${ALS_PLUGIN_ROOT}"
 echo "HARNESS=${HARNESS}"
+echo "ALS_PLATFORM_CODE=${ALS_PLATFORM_CODE}"
 echo "ALS_PLUGIN_MANIFEST_PATH=${ALS_PLUGIN_MANIFEST_PATH}"
 echo "ALS_MARKETPLACE_MANIFEST_PATH=${ALS_MARKETPLACE_MANIFEST_PATH}"
 PLUGIN_MANIFEST_VERSION=$(jq -r '.version // empty' "${ALS_PLUGIN_MANIFEST_PATH}" 2>/dev/null)
@@ -71,34 +69,39 @@ if [ -z "$MARKETPLACE" ]; then
 fi
 KEY="als@$MARKETPLACE"
 echo "Lookup key: $KEY"
+if [ "$HARNESS" = "codex" ]; then
+  echo "CODEX_PLUGIN_SELF_UPDATE_UNSUPPORTED: Codex does not currently expose a stable in-session plugin self-update primitive to this skill."
+  echo "Refresh the ALS Codex plugin through Codex's plugin manager first, then rerun \$update for runtime follow-through."
+  echo "Skipping Claude installed_plugins.json lookup."
+else
+  MATCHES=$(jq -c --arg k "$KEY" --arg cwd "$PWD" '
+    (.plugins[$k] // [])
+    | map(select(.scope == "user" or .projectPath == $cwd))
+  ' ~/.claude/plugins/installed_plugins.json)
+  MATCH_COUNT=$(jq 'length' <<<"$MATCHES")
 
-MATCHES=$(jq -c --arg k "$KEY" --arg cwd "$PWD" '
-  (.plugins[$k] // [])
-  | map(select(.scope == "user" or .projectPath == $cwd))
-' ~/.claude/plugins/installed_plugins.json)
-MATCH_COUNT=$(jq 'length' <<<"$MATCHES")
+  if [ "$MATCH_COUNT" -eq 0 ]; then
+    echo "The running ALS install has no installed_plugins.json record — likely a --plugin-dir development load — and /update doesn't apply."
+    exit 1
+  fi
 
-if [ "$MATCH_COUNT" -eq 0 ]; then
-  echo "The running ALS install has no installed_plugins.json record — likely a --plugin-dir development load — and /update doesn't apply."
-  exit 1
+  if [ "$MATCH_COUNT" -gt 1 ]; then
+    echo "Multiple installed_plugins.json records matched key=$KEY cwd=$PWD. Refusing to guess."
+    jq '.' <<<"$MATCHES"
+    exit 1
+  fi
+
+  ACTIVE=$(jq '.[0]' <<<"$MATCHES")
+  ACTIVE_INSTALL_PATH=$(jq -r '.installPath // empty' <<<"$ACTIVE")
+  if [ -n "$ACTIVE_INSTALL_PATH" ] && [ "$ACTIVE_INSTALL_PATH" != "$ALS_PLUGIN_ROOT" ]; then
+    echo "INSTALL_PATH_MISMATCH: installed_plugins.json matched $KEY, but installPath=$ACTIVE_INSTALL_PATH does not match ALS_PLUGIN_ROOT=$ALS_PLUGIN_ROOT"
+    exit 1
+  fi
+  jq '.' <<<"$ACTIVE"
 fi
-
-if [ "$MATCH_COUNT" -gt 1 ]; then
-  echo "Multiple installed_plugins.json records matched key=$KEY cwd=$PWD. Refusing to guess."
-  jq '.' <<<"$MATCHES"
-  exit 1
-fi
-
-ACTIVE=$(jq '.[0]' <<<"$MATCHES")
-ACTIVE_INSTALL_PATH=$(jq -r '.installPath // empty' <<<"$ACTIVE")
-if [ -n "$ACTIVE_INSTALL_PATH" ] && [ "$ACTIVE_INSTALL_PATH" != "$ALS_PLUGIN_ROOT" ]; then
-  echo "INSTALL_PATH_MISMATCH: installed_plugins.json matched $KEY, but installPath=$ACTIVE_INSTALL_PATH does not match ALS_PLUGIN_ROOT=$ALS_PLUGIN_ROOT"
-  exit 1
-fi
-jq '.' <<<"$ACTIVE"
 ```
 
-The jq read must select the active record for this session: user-scope records match unconditionally; project-scope records only match when `projectPath == $PWD`, and `installPath` must match `${ALS_PLUGIN_ROOT}` when present. The final `ACTIVE` object is the full installed entry (version, scope, installPath, gitCommitSha, installedAt, lastUpdated, `projectPath` if project-scope).
+For Claude, the jq read must select the active record for this session: user-scope records match unconditionally; project-scope records only match when `projectPath == $PWD`, and `installPath` must match `${ALS_PLUGIN_ROOT}` when present. The final `ACTIVE` object is the full installed entry (version, scope, installPath, gitCommitSha, installedAt, lastUpdated, `projectPath` if project-scope). For Codex, do not read Claude install state; mark plugin self-update as skipped, skip Phases 3-5, and continue to Phase 6 so runtime follow-through can run against the current plugin root.
 
 **Surface:**
 - `ALS_PLUGIN_ROOT: <full path>` — proves which cache the running skill came from
@@ -108,12 +111,15 @@ The jq read must select the active record for this session: user-scope records m
 - `Marketplace: <name>` (`als-marketplace` or `als-marketplace-stable`)
 - `Channel: <RC | stable>` (derived from marketplace name)
 - `Lookup key: <key>` — the JSON path queried
-- The full installed-plugin entry as JSON (operator can verify gitCommitSha, install timestamps, etc.)
-- One-line summary: `Installed: <version> (<scope> scope, <channel> channel)`
+- For Claude: the full installed-plugin entry as JSON (operator can verify gitCommitSha, install timestamps, etc.)
+- For Codex: `Plugin self-update: skipped — Codex self-update primitive unavailable to this skill`
+- One-line summary: `Installed: <version> (<scope> scope, <channel> channel)` for Claude, or `Installed manifest: <version> (<channel> channel, Codex self-update skipped)` for Codex
 
-If the filtered read returns zero matches: explain that the running ALS install has no `installed_plugins.json` record — likely a `--plugin-dir` development load — and `/update` doesn't apply. Stop. If it returns more than one match: surface the full candidate array and stop.
+If the Claude filtered read returns zero matches: explain that the running ALS install has no `installed_plugins.json` record — likely a `--plugin-dir` development load — and `/update` doesn't apply. Stop. If it returns more than one match: surface the full candidate array and stop.
 
 ## Phase 3: Refresh the marketplace clone, read latest
+
+Skip this phase when `HARNESS=codex`; Codex plugin self-update is not implemented in this skill yet.
 
 ```bash
 claude plugin marketplace update "$MARKETPLACE" 2>&1
@@ -144,6 +150,8 @@ curl -sL "https://raw.githubusercontent.com/$REPO/$SOURCE_REF/.claude-plugin/plu
 - If the latest matches the installed version: `Already on latest. No update needed.` Stop here for clean output.
 
 ## Phase 4: Apply the update
+
+Skip this phase when `HARNESS=codex`; continue to Phase 6.
 
 ```bash
 MATCHES=$(jq -c --arg k "$KEY" --arg cwd "$PWD" '
@@ -184,6 +192,8 @@ Surface the full command output. The CLI primitive prints status/error directly.
 If the command fails: stop and report. Suggest manual fallback — opening a separate `claude` session, typing `/plugins`, navigating to ALS, updating from the menu.
 
 ## Phase 5: Verify the new version landed
+
+Skip this phase when `HARNESS=codex`; continue to Phase 6.
 
 ```bash
 MATCHES=$(jq -c --arg k "$KEY" --arg cwd "$PWD" '
@@ -342,13 +352,13 @@ Surface a single, formatted summary block that captures the whole run. This is w
 - **Platform:** <code> (<human name>)
 - **Harness:** <claude | codex>
 - **Channel:** <RC | stable> (`<marketplace name>`)
-- **Scope:** <user | project>
-- **Marketplace clone path:** ~/.claude/plugins/marketplaces/<marketplace>/
-- **Plugin install path:** <installPath from installed_plugins.json>
+- **Scope:** <user | project | codex-unavailable>
+- **Marketplace clone path:** <path, or "skipped for Codex">
+- **Plugin install path:** <installPath from installed_plugins.json, or ALS_PLUGIN_ROOT for Codex>
 - **ALS plugin root:** <ALS_PLUGIN_ROOT>
 - **Version:** <old> → <new>  (or: <version> — no change)
-- **Git commit SHA:** <new gitCommitSha>
-- **Action taken:** <"Update applied" | "Already on latest, no action" | "Failed">
+- **Git commit SHA:** <new gitCommitSha, or "unavailable for Codex self-update skip">
+- **Action taken:** <"Update applied" | "Already on latest, no action" | "Failed" | "Plugin self-update skipped for Codex">
 - **Runtime follow-through:** <"Language-upgrade run" | "Construct-upgrade run" | "No follow-up needed" | "Failed during follow-through">
 - **Restart required:** yes — <one-line reason for this platform>
 
@@ -359,7 +369,7 @@ The architect uses `/copy` to grab this. Edgerunner support can read this and re
 
 ## Why this skill exists
 
-The CLI primitive `claude plugin update als@<marketplace> --scope <scope>` is the documented universal update path for Claude Code. It works the same way regardless of Claude Code platform, scope, or channel. This skill packages that primitive into an in-session flow with channel self-detection, scope resolution, version readouts, verbose diagnostics, and verification — so the operator gets a guided experience and a complete release/support trail in one command.
+The CLI primitive `claude plugin update als@<marketplace> --scope <scope>` is the documented update path for Claude Code. It works the same way regardless of Claude Code platform, scope, or channel. This skill packages that primitive into an in-session flow with channel self-detection, scope resolution, version readouts, verbose diagnostics, and verification — so the operator gets a guided experience and a complete release/support trail in one command. Codex support currently covers runtime follow-through only; plugin self-update waits for a stable Codex update primitive.
 
 Empirical history: Earlier (2026-04-28) iterations walked the operator through Claude Code Desktop's GUI Update button. That path was unreliable in user scope (button stayed greyed) and broken in project scope (button activated after Cmd+R refresh but apply step failed with a false "192 files modified" warning). The CLI primitive — invoked directly via Bash shellout — worked in both scopes once the `--scope` flag was passed correctly. Channels were added (2026-04-28) to give the architect a pre-release test surface (RC) without affecting edgerunners (stable). Channel self-detection via the ALS plugin root (also 2026-04-28) eliminated the need for any "single-install" testing rule on the architect's machine.
 

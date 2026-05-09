@@ -529,7 +529,7 @@ Rules:
 
 ## Deployment Note
 
-Authored Delamains are TypeScript, but Claude deploy still writes a runtime `delamain.yaml` into `.claude/delamains/{name}/` beside `runtime-manifest.json` so existing dispatchers keep the same downstream contract.
+Authored Delamains are TypeScript, but deploy still writes a runtime `delamain.yaml` into `${DELAMAINS_ROOT}/{name}/` beside `runtime-manifest.json` so existing dispatchers keep the same downstream contract.
 
 ## Detailed Rules
 

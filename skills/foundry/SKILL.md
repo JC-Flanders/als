@@ -25,7 +25,7 @@ Initialize runtime variables:
 bash {skill-dir}/../lib/runtime-env.sh
 ```
 
-Extract `ALS_PLUGIN_ROOT`, `SYSTEM_ROOT`, `HARNESS`, `SKILLS_ROOT`, and `DELAMAINS_ROOT` from the output. If the output is `NO_SYSTEM`, tell the operator: "This project isn't an ALS system yet. Run `/install` first to bootstrap." Do not attempt to bootstrap from Foundry — that's a separate flow and pulling bundled modules into nothing is not a sane default.
+Extract `ALS_PLUGIN_ROOT`, `SYSTEM_ROOT`, `HARNESS`, `ALS_PLATFORM_CODE`, `SKILLS_ROOT`, and `DELAMAINS_ROOT` from the output. If the output is `NO_SYSTEM`, tell the operator: "This project isn't an ALS system yet. Run `/install` first to bootstrap." Do not attempt to bootstrap from Foundry — that's a separate flow and pulling bundled modules into nothing is not a sane default.
 
 Then confirm the plugin root:
 
@@ -173,9 +173,9 @@ The operator does not request this step. New modules are useless until projected
 
 Installed modules may include delamains — autonomous dispatchers that watch for pipeline work and act on it. Delamains are inert until their dispatchers are running, which the `/bootup` skill handles. Ask the operator before invoking it.
 
-Read `$CLAUDE_CODE_ENTRYPOINT` and branch on the current platform per [`platforms.md`](../docs/references/platforms.md).
+Use `ALS_PLATFORM_CODE` from the runtime helper and branch on the current platform per [`platforms.md`](../docs/references/platforms.md). If it is empty and `HARNESS` is `claude`, map `$CLAUDE_CODE_ENTRYPOINT` via the same reference. If `HARNESS` is `codex`, treat the platform as [`ALS-PLAT-CXCLI`](../docs/references/platforms.md).
 
-### On Claude Code CLI ([`ALS-PLAT-CCLI`](../docs/references/platforms.md)) — default
+### On CLI harnesses ([`ALS-PLAT-CCLI`](../docs/references/platforms.md), [`ALS-PLAT-CXCLI`](../docs/references/platforms.md)) — default
 
 Use a single AskUserQuestion:
 

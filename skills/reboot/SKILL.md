@@ -52,7 +52,7 @@ One line per restarted dispatcher. No tables, no ceremony.
 
 ## Notes
 
-- Delamains run as background shells managed by this Claude session. They die when the session ends.
+- Delamains run as background shells managed by this harness session. They die when the session ends.
 - Plugin root resolution comes from the scan output and is passed to child processes as `ALS_PLUGIN_ROOT`.
 - For a full restart of everything (kill running + start all), use `/bootup`.
 - Speed is the point. The operator invokes this mid-flow.

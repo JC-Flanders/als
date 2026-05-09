@@ -6,6 +6,14 @@
 #   bash skills/lib/runtime-env.sh [claude|codex] [start-dir]
 #   bash skills/lib/runtime-env.sh [start-dir]
 #
+# Harness resolution order is:
+#   explicit request / ALS_HARNESS
+#   live process env (CODEX_THREAD_ID or CLAUDE_CODE_ENTRYPOINT)
+#   installed plugin cache path
+#   system projection roots when a system root is available
+# ALS_PLATFORM_CODE is then derived from the resolved harness plus the
+# strongest harness-specific live signal currently available.
+#
 # Source usage:
 #   source "$ALS_PLUGIN_ROOT/skills/lib/runtime-env.sh"
 #   als_runtime_init_plugin_env codex
@@ -31,28 +39,123 @@ als_runtime_find_system_root() {
     return 1
 }
 
+als_runtime_set_manifest_paths() {
+    local plugin_root="$1"
+    local harness="$2"
+
+    case "$harness" in
+        claude)
+            ALS_PLUGIN_MANIFEST_PATH="$plugin_root/.claude-plugin/plugin.json"
+            ALS_MARKETPLACE_MANIFEST_PATH="$plugin_root/.claude-plugin/marketplace.json"
+            ;;
+        codex)
+            ALS_PLUGIN_MANIFEST_PATH="$plugin_root/.codex-plugin/plugin.json"
+            ALS_MARKETPLACE_MANIFEST_PATH="$plugin_root/.agents/plugins/marketplace.json"
+            ;;
+        *)
+            ALS_PLUGIN_MANIFEST_PATH=""
+            ALS_MARKETPLACE_MANIFEST_PATH=""
+            ALS_RUNTIME_ERROR="UNKNOWN_HARNESS: $harness"
+            return 1
+            ;;
+    esac
+}
+
+als_runtime_resolve_platform_code() {
+    local harness="$1"
+
+    case "$harness" in
+        codex)
+            printf '%s\n' "ALS-PLAT-CXCLI"
+            ;;
+        claude)
+            case "${CLAUDE_CODE_ENTRYPOINT:-}" in
+                cli)
+                    printf '%s\n' "ALS-PLAT-CCLI"
+                    ;;
+                claude-desktop)
+                    printf '%s\n' "ALS-PLAT-CDSK"
+                    ;;
+                remote)
+                    printf '%s\n' "ALS-PLAT-CWEB"
+                    ;;
+                *)
+                    printf '%s\n' ""
+                    ;;
+            esac
+            ;;
+        *)
+            printf '%s\n' ""
+            ;;
+    esac
+}
+
 als_runtime_resolve_harness() {
     local requested_harness="${1:-${ALS_HARNESS:-}}"
     local plugin_root="${2:-$(als_runtime_plugin_root)}"
     local sys_root="${3:-}"
+    local has_codex_projection
+    local has_claude_projection
+    local has_codex_env="no"
+    local has_claude_env="no"
 
     case "$requested_harness" in
         claude|codex)
             printf '%s\n' "$requested_harness"
             ;;
         "")
-            if [[ "$plugin_root" == *"/.codex/"* ]]; then
+            if [[ -n "${CODEX_THREAD_ID:-}" ]]; then
+                has_codex_env="yes"
+            fi
+            if [[ "${CLAUDE_CODE_ENTRYPOINT:-}" == "cli" || "${CLAUDE_CODE_ENTRYPOINT:-}" == "claude-desktop" || "${CLAUDE_CODE_ENTRYPOINT:-}" == "remote" ]]; then
+                has_claude_env="yes"
+            fi
+
+            if [[ "$has_codex_env" == "yes" && "$has_claude_env" == "no" ]]; then
+                printf '%s\n' "codex"
+            elif [[ "$has_claude_env" == "yes" && "$has_codex_env" == "no" ]]; then
+                printf '%s\n' "claude"
+            elif [[ "$has_codex_env" == "yes" && "$has_claude_env" == "yes" ]]; then
+                ALS_RUNTIME_ERROR="AMBIGUOUS_HARNESS: both CODEX_THREAD_ID and CLAUDE_CODE_ENTRYPOINT are set; pass claude|codex or set ALS_HARNESS"
+                printf '%s\n' "$ALS_RUNTIME_ERROR"
+                return 1
+            elif [[ "$plugin_root" == *"/.codex/"* ]]; then
                 printf '%s\n' "codex"
             elif [[ "$plugin_root" == *"/.claude/"* ]]; then
                 printf '%s\n' "claude"
-            elif [[ -n "$sys_root" && -d "$sys_root/.codex/delamains" && ! -d "$sys_root/.claude/delamains" ]]; then
-                printf '%s\n' "codex"
+            elif [[ -n "$sys_root" ]]; then
+                has_codex_projection="no"
+                has_claude_projection="no"
+
+                if [[ -d "$sys_root/.codex/delamains" || -d "$sys_root/.agents/skills" || -f "$sys_root/.als/AGENTS.md" ]]; then
+                    has_codex_projection="yes"
+                fi
+                if [[ -d "$sys_root/.claude/delamains" || -d "$sys_root/.claude/skills" || -f "$sys_root/.als/CLAUDE.md" ]]; then
+                    has_claude_projection="yes"
+                fi
+
+                if [[ "$has_codex_projection" == "yes" && "$has_claude_projection" == "no" ]]; then
+                    printf '%s\n' "codex"
+                elif [[ "$has_claude_projection" == "yes" && "$has_codex_projection" == "no" ]]; then
+                    printf '%s\n' "claude"
+                elif [[ "$has_codex_projection" == "yes" && "$has_claude_projection" == "yes" ]]; then
+                    ALS_RUNTIME_ERROR="AMBIGUOUS_HARNESS: both codex and claude projection surfaces exist; pass claude|codex or set ALS_HARNESS"
+                    printf '%s\n' "$ALS_RUNTIME_ERROR"
+                    return 1
+                else
+                    ALS_RUNTIME_ERROR="UNKNOWN_HARNESS: no harness signal from live env, plugin path, or system projection; pass claude|codex or set ALS_HARNESS"
+                    printf '%s\n' "$ALS_RUNTIME_ERROR"
+                    return 1
+                fi
             else
-                printf '%s\n' "claude"
+                ALS_RUNTIME_ERROR="UNKNOWN_HARNESS: no harness signal from live env, plugin path, or system projection; pass claude|codex or set ALS_HARNESS"
+                printf '%s\n' "$ALS_RUNTIME_ERROR"
+                return 1
             fi
             ;;
         *)
             ALS_RUNTIME_ERROR="UNKNOWN_HARNESS: $requested_harness"
+            printf '%s\n' "$ALS_RUNTIME_ERROR"
             return 1
             ;;
     esac
@@ -67,21 +170,26 @@ als_runtime_init_plugin_env() {
     ALS_RUNTIME_ERROR=""
 
     if ! harness="$(als_runtime_resolve_harness "$requested_harness" "$plugin_root")"; then
+        ALS_RUNTIME_ERROR="${harness:-${ALS_RUNTIME_ERROR:-UNKNOWN_HARNESS}}"
         return 1
     fi
 
     ALS_PLUGIN_ROOT="$plugin_root"
     HARNESS="$harness"
-    ALS_PLUGIN_MANIFEST_PATH="$plugin_root/.claude-plugin/plugin.json"
-    ALS_MARKETPLACE_MANIFEST_PATH="$plugin_root/.claude-plugin/marketplace.json"
+    ALS_PLATFORM_CODE="$(als_runtime_resolve_platform_code "$harness")"
+    if ! als_runtime_set_manifest_paths "$plugin_root" "$harness"; then
+        return 1
+    fi
 
     ALS_RUNTIME_PLUGIN_ROOT="$ALS_PLUGIN_ROOT"
     ALS_RUNTIME_HARNESS="$HARNESS"
+    ALS_RUNTIME_PLATFORM_CODE="$ALS_PLATFORM_CODE"
     ALS_RUNTIME_PLUGIN_MANIFEST_PATH="$ALS_PLUGIN_MANIFEST_PATH"
     ALS_RUNTIME_MARKETPLACE_MANIFEST_PATH="$ALS_MARKETPLACE_MANIFEST_PATH"
 
     export ALS_PLUGIN_ROOT
     export HARNESS
+    export ALS_PLATFORM_CODE
     export ALS_PLUGIN_MANIFEST_PATH
     export ALS_MARKETPLACE_MANIFEST_PATH
     return 0
@@ -111,6 +219,7 @@ als_runtime_init_env() {
     fi
 
     if ! harness="$(als_runtime_resolve_harness "$requested_harness" "$plugin_root" "$sys_root")"; then
+        ALS_RUNTIME_ERROR="${harness:-${ALS_RUNTIME_ERROR:-UNKNOWN_HARNESS}}"
         return 1
     fi
 
@@ -140,8 +249,10 @@ als_runtime_init_env() {
     ALS_PLUGIN_ROOT="$plugin_root"
     SYSTEM_ROOT="$sys_root"
     HARNESS="$harness"
-    ALS_PLUGIN_MANIFEST_PATH="$plugin_root/.claude-plugin/plugin.json"
-    ALS_MARKETPLACE_MANIFEST_PATH="$plugin_root/.claude-plugin/marketplace.json"
+    ALS_PLATFORM_CODE="$(als_runtime_resolve_platform_code "$harness")"
+    if ! als_runtime_set_manifest_paths "$plugin_root" "$harness"; then
+        return 1
+    fi
     SKILLS_ROOT="$skills_root"
     DELAMAINS_ROOT="$delamains_root"
     DELAMAIN_ROOTS_FILE="$delamain_roots_file"
@@ -154,6 +265,7 @@ als_runtime_init_env() {
     ALS_RUNTIME_PLUGIN_ROOT="$ALS_PLUGIN_ROOT"
     ALS_RUNTIME_SYSTEM_ROOT="$SYSTEM_ROOT"
     ALS_RUNTIME_HARNESS="$HARNESS"
+    ALS_RUNTIME_PLATFORM_CODE="$ALS_PLATFORM_CODE"
     ALS_RUNTIME_PLUGIN_MANIFEST_PATH="$ALS_PLUGIN_MANIFEST_PATH"
     ALS_RUNTIME_MARKETPLACE_MANIFEST_PATH="$ALS_MARKETPLACE_MANIFEST_PATH"
     ALS_RUNTIME_SKILLS_ROOT="$SKILLS_ROOT"
@@ -168,6 +280,7 @@ als_runtime_init_env() {
     export ALS_PLUGIN_ROOT
     export SYSTEM_ROOT
     export HARNESS
+    export ALS_PLATFORM_CODE
     export ALS_PLUGIN_MANIFEST_PATH
     export ALS_MARKETPLACE_MANIFEST_PATH
     export SKILLS_ROOT
@@ -184,6 +297,7 @@ als_runtime_init_env() {
 als_runtime_emit_plugin_env() {
     echo "ALS_PLUGIN_ROOT: $ALS_PLUGIN_ROOT"
     echo "HARNESS: $HARNESS"
+    echo "ALS_PLATFORM_CODE: $ALS_PLATFORM_CODE"
     echo "ALS_PLUGIN_MANIFEST_PATH: $ALS_PLUGIN_MANIFEST_PATH"
     echo "ALS_MARKETPLACE_MANIFEST_PATH: $ALS_MARKETPLACE_MANIFEST_PATH"
 }
@@ -192,6 +306,7 @@ als_runtime_emit_env() {
     echo "ALS_PLUGIN_ROOT: $ALS_PLUGIN_ROOT"
     echo "SYSTEM_ROOT: $SYSTEM_ROOT"
     echo "HARNESS: $HARNESS"
+    echo "ALS_PLATFORM_CODE: $ALS_PLATFORM_CODE"
     echo "SKILLS_ROOT: $SKILLS_ROOT"
     echo "DELAMAINS_ROOT: $DELAMAINS_ROOT"
     echo "DELAMAIN_ROOTS_FILE: $DELAMAIN_ROOTS_FILE"

@@ -117,13 +117,13 @@ bun ${ALS_PLUGIN_ROOT}/alsc/compiler/src/cli.ts validate ${SYSTEM_ROOT}
 ```
 
 2. Report the final per-hop outcome, the final `als_version`, and any future obligations acknowledged during `operator-prompt` steps.
-3. If `/upgrade-language` is being run through `/update`, let the SDR 039 transaction wrapper own the staged `alsc deploy claude` refresh. Do not restate a competing projection contract here.
+3. If `/upgrade-language` is being run through `/update`, let the SDR 039 transaction wrapper own the staged `alsc deploy <harness>` refresh. Do not restate a competing projection contract here.
 
 ## Boundaries
 
 - No rollback.
 - No partial-system upgrades.
 - No plugin-tree mutation from recipe-authored steps.
-- No uncommitted `.claude/` mutation may escape a step. The shipped v1→v2 bootstrap cleanup step may only remove historical `.claude/` runtime ephemera from the git index as one-time hygiene.
+- No uncommitted active-projection mutation may escape a step. The shipped v1→v2 bootstrap cleanup step may only remove historical `.claude/` runtime ephemera from the git index as one-time hygiene.
 - No construct-upgrade authorship here; that stays a sibling primitive.
 - ALS-066 ships the engine and contract only. Do not fabricate a public `v1 → v2` recipe when none exists.

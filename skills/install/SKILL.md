@@ -28,7 +28,7 @@ Use `references/first-touch-flow.md` to open the interaction. The operator shoul
 7. create the operator profile if missing
 8. ask what to do next and hand off to the matching skill
 
-Do not ask the operator to open a terminal. Use Claude tools from inside the session.
+Do not ask the operator to open a terminal. Use the active harness tools from inside the session.
 
 ## Phase 1: Runtime prerequisites
 
@@ -40,7 +40,7 @@ Before interviewing, verify the install can succeed.
 bash {skill-dir}/../lib/runtime-env.sh plugin
 ```
 
-Extract `ALS_PLUGIN_ROOT`, `HARNESS`, `ALS_PLUGIN_MANIFEST_PATH`, and `ALS_MARKETPLACE_MANIFEST_PATH` from the output.
+Extract `ALS_PLUGIN_ROOT`, `HARNESS`, `ALS_PLATFORM_CODE`, `ALS_PLUGIN_MANIFEST_PATH`, and `ALS_MARKETPLACE_MANIFEST_PATH` from the output.
 
 Then confirm the plugin root:
 
@@ -72,7 +72,7 @@ Report the successful prerequisite check before continuing.
 Follow `references/platform-detection.md`.
 
 - Produce one explicit platform acknowledgement using the matching `ALS-PLAT-XXXX` row from [`platforms.md`](nfrith-repos/als/skills/docs/references/platforms.md).
-- If `$CLAUDE_CODE_ENTRYPOINT` is unset or unrecognized, use AskUserQuestion to confirm in plain language. Do not show technical platform codes as visible options.
+- If the runtime helper cannot resolve a platform code, use AskUserQuestion to confirm in plain language. Do not show technical platform codes as visible options.
 - Do not branch behavior yet beyond acknowledgement. Call out that platform-specific install behavior is future work.
 
 ## Phase 3: Existing-system guard

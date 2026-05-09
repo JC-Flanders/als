@@ -121,4 +121,4 @@ Report:
 - This file is system-scoped. Each ALS system keeps its own `.als/operator.md`.
 - `/install` invokes this skill only when the config is missing.
 - Re-running `/install` does not reopen this flow; `/configure-operator` is the ongoing edit surface.
-- The usual `.als/CLAUDE.md` "do not edit" warning does not block this file. `/configure-operator` is the approved managed writer for `.als/operator.md`.
+- The active harness system instruction file is compiler-managed and should not be edited by hand. That warning does not block this file: `/configure-operator` is the approved managed writer for `.als/operator.md`.

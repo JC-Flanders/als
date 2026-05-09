@@ -16,7 +16,7 @@ The power button. Kills all running dispatchers, clears all state, starts everyt
 
 ### 1. Parse scan results
 
-Extract `ALS_PLUGIN_ROOT`, `SYSTEM_ROOT`, `DELAMAINS_ROOT`, `STATUSLINE_CACHE_ROOT`, `STATUSLINE_SUPPORTED`, and delamain names from the scan output. Use those names as the shell variables in the commands below.
+Extract `ALS_PLUGIN_ROOT`, `SYSTEM_ROOT`, `HARNESS`, `ALS_PLATFORM_CODE`, `DELAMAINS_ROOT`, `STATUSLINE_CACHE_ROOT`, `STATUSLINE_SUPPORTED`, and delamain names from the scan output. Use those names as the shell variables in the commands below.
 
 - `NO_SYSTEM` → "Not an ALS system." Exit.
 - `NO_DELAMAINS` → "No delamains found." Exit.
@@ -87,10 +87,10 @@ The landing page remains `http://127.0.0.1:4646/`; journey inspection is now ava
 
 ### 6. Open the dashboard on Claude Code Desktop
 
-Read `$CLAUDE_CODE_ENTRYPOINT` to identify the current platform per the matrix in [`platforms.md`](../docs/references/platforms.md).
+Use `ALS_PLATFORM_CODE` from the scan output to identify the current platform per the matrix in [`platforms.md`](../docs/references/platforms.md). If it is empty and `HARNESS` is `claude`, map `$CLAUDE_CODE_ENTRYPOINT` via the same reference. If `HARNESS` is `codex`, treat the platform as [`ALS-PLAT-CXCLI`](../docs/references/platforms.md).
 
-- If the entrypoint is `claude-desktop` ([`ALS-PLAT-CDSK`](../docs/references/platforms.md)): automatically open `http://127.0.0.1:4646` in the Desktop's built-in preview tool — the specific tool name varies by Desktop version, so use whichever preview/browser tool the harness currently exposes for rendering a local URL. Do **not** ask the operator first; they opted in to bootup, the dashboard open is a free side-effect.
-- On any other entrypoint (`cli`, `remote`, unobserved): skip the auto-open. The URL is still reported in Step 7 so the operator can open it manually or run the TUI against it.
+- If the platform is [`ALS-PLAT-CDSK`](../docs/references/platforms.md): automatically open `http://127.0.0.1:4646` in the Desktop's built-in preview tool — the specific tool name varies by Desktop version, so use whichever preview/browser tool the harness currently exposes for rendering a local URL. Do **not** ask the operator first; they opted in to bootup, the dashboard open is a free side-effect.
+- On any other platform ([`ALS-PLAT-CCLI`](../docs/references/platforms.md), [`ALS-PLAT-CXCLI`](../docs/references/platforms.md), `remote`, unobserved): skip the auto-open. The URL is still reported in Step 7 so the operator can open it manually or run the TUI against it.
 
 ### 7. Report
 
@@ -98,7 +98,7 @@ One line per dispatcher. State the count: "{N} dispatchers running." Then add th
 
 ## Notes
 
-- Delamains run as background shells managed by this Claude session. They die when the session ends.
+- Delamains run as background shells managed by this harness session. They die when the session ends.
 - The delamain dashboard service is bound to the same session lifetime as the dispatchers and is also restarted on every bootup.
 - This is the power button — it always kills everything and restarts. For bringing back only crashed dispatchers, use `/reboot`.
 - Plugin root resolution comes from the scan output and is passed to child processes as `ALS_PLUGIN_ROOT`.
