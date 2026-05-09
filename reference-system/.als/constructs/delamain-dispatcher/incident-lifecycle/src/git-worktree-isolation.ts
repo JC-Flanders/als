@@ -25,6 +25,7 @@ import {
   runCommand,
   runGit,
 } from "./git.js";
+import { convergePrimaryClone } from "./primary-clone-convergence.js";
 
 export interface MountedSubmoduleWorktree {
   repoPath: string;
@@ -493,6 +494,7 @@ export class GitWorktreeIsolationStrategy {
         }
 
         submodule.integratedCommit = publishResult.publishedCommit;
+        await this.runPrimaryCloneFollowThrough(submodule.repoPath, submodule.primaryRepoPath);
         await runGit(submodule.worktreePath, ["checkout", "--detach", submodule.integratedCommit]);
         detachedWorktrees.push(submodule);
         await runGit(input.prepared.worktreePath, ["add", submodule.repoPath]);
@@ -619,6 +621,7 @@ export class GitWorktreeIsolationStrategy {
         }
 
       hostIntegratedCommit = hostPublishResult.publishedCommit;
+      await this.runPrimaryCloneFollowThrough(".", this.systemRoot);
 
       return {
         status: "merged",
@@ -1359,6 +1362,20 @@ export class GitWorktreeIsolationStrategy {
         retryCount: 0,
       };
     }
+  }
+
+  private async runPrimaryCloneFollowThrough(repoPath: string, repoRoot: string): Promise<void> {
+    const convergence = await convergePrimaryClone({
+      repoRoot,
+      publisher: "dispatcher-merge-back",
+    });
+    if (convergence.status === "converged") {
+      return;
+    }
+
+    console.warn(
+      `[dispatcher] primary clone follow-through for '${repoPath}' returned ${convergence.status}: ${convergence.message}`,
+    );
   }
 
   private async rollbackMergeTransaction(input: {
