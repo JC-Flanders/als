@@ -611,6 +611,11 @@ function buildSystemFilePlans(systemRootAbs: string, spec: HarnessProjectionSpec
 function buildCodexSystemFilePlans(systemRootAbs: string): HarnessSystemInstructionWorkPlan[] {
   const hooksPathAbs = resolve(systemRootAbs, ".codex/hooks.json");
   const configPathAbs = resolve(systemRootAbs, ".codex/config.toml");
+  const configExists = existsSync(configPathAbs);
+  const currentConfigContents = configExists ? readFileSync(configPathAbs, "utf-8") : null;
+  const configContents = currentConfigContents !== null
+    ? mergeCodexHooksFeature(currentConfigContents)
+    : ALS_CODEX_CONFIG_TOML_CONTENTS;
   const plans: HarnessSystemInstructionWorkPlan[] = [
     {
       kind: "generated_codex_hooks",
@@ -620,16 +625,67 @@ function buildCodexSystemFilePlans(systemRootAbs: string): HarnessSystemInstruct
     },
   ];
 
-  if (!existsSync(configPathAbs)) {
+  if (!configExists || configContents !== currentConfigContents) {
     plans.push({
-      kind: "generated_codex_config",
+      kind: configExists ? "merged_codex_config" : "generated_codex_config",
       target_path: toSystemRelative(systemRootAbs, configPathAbs),
       target_path_abs: configPathAbs,
-      contents: ALS_CODEX_CONFIG_TOML_CONTENTS,
+      contents: configContents,
     });
   }
 
   return plans;
+}
+
+function mergeCodexHooksFeature(current: string): string {
+  const hadTrailingNewline = current.endsWith("\n");
+  const lines = current.length === 0 ? [] : current.split(/\r?\n/);
+  if (hadTrailingNewline && lines.length > 0) {
+    lines.pop();
+  }
+
+  let featuresStart = -1;
+  let featuresEnd = lines.length;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (/^\s*\[features\]\s*(?:#.*)?$/.test(lines[i])) {
+      featuresStart = i;
+      continue;
+    }
+    if (featuresStart >= 0 && i > featuresStart && /^\s*\[.*\]\s*(?:#.*)?$/.test(lines[i])) {
+      featuresEnd = i;
+      break;
+    }
+  }
+
+  if (featuresStart < 0) {
+    const next = [...lines];
+    if (next.length > 0 && next[next.length - 1] !== "") {
+      next.push("");
+    }
+    next.push("[features]", "codex_hooks = true");
+    return next.join("\n") + "\n";
+  }
+
+  for (let i = featuresStart + 1; i < featuresEnd; i += 1) {
+    const codexHooksMatch = lines[i].match(/^(\s*)codex_hooks\s*=\s*(true|false)\b(.*)$/);
+    if (codexHooksMatch) {
+      if (codexHooksMatch[2] === "true") {
+        return current;
+      }
+      const next = [...lines];
+      next[i] = `${codexHooksMatch[1]}codex_hooks = true${codexHooksMatch[3]}`;
+      return next.join("\n") + (hadTrailingNewline ? "\n" : "");
+    }
+  }
+
+  let insertionIndex = featuresEnd;
+  while (insertionIndex > featuresStart + 1 && lines[insertionIndex - 1].trim() === "") {
+    insertionIndex -= 1;
+  }
+
+  const next = [...lines];
+  next.splice(insertionIndex, 0, "codex_hooks = true");
+  return next.join("\n") + (hadTrailingNewline ? "\n" : "");
 }
 
 function buildCodexHooksJson(): string {

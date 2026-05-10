@@ -306,6 +306,53 @@ test("deploy CLI projects Codex skills, guidance, and Delamain runtime", { timeo
   });
 });
 
+test("deploy CLI minimally merges codex hooks feature into existing Codex config", { timeout: 180_000 }, async () => {
+  await withFixtureSandbox("deploy-cli-codex-config-merge", async ({ root }) => {
+    await rm(join(root, ".agents/skills"), { recursive: true, force: true });
+    await rm(join(root, ".codex/delamains"), { recursive: true, force: true });
+    await mkdir(join(root, ".codex"), { recursive: true });
+    await writeFile(
+      join(root, ".codex/config.toml"),
+      [
+        'model = "gpt-5.4"',
+        "",
+        "[features]",
+        "some_existing_feature = true",
+        "",
+        "[tools]",
+        "web_search = true",
+        "",
+      ].join("\n"),
+    );
+
+    const process = Bun.spawnSync({
+      cmd: ["bun", "src/cli.ts", "deploy", "codex", root, "factory"],
+      cwd: compilerRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(process.exitCode).toBe(0);
+    const output = JSON.parse(new TextDecoder().decode(process.stdout)) as {
+      status: string;
+      written_system_file_count: number;
+    };
+    expect(output.status).toBe("pass");
+    expect(output.written_system_file_count).toBe(3);
+    expect(readFileSync(join(root, ".codex/config.toml"), "utf-8")).toBe([
+      'model = "gpt-5.4"',
+      "",
+      "[features]",
+      "some_existing_feature = true",
+      "codex_hooks = true",
+      "",
+      "[tools]",
+      "web_search = true",
+      "",
+    ].join("\n"));
+  });
+});
+
 test("deploy CLI can target a single module", { timeout: 180_000 }, async () => {
   await withFixtureSandbox("deploy-cli-module-filter", async ({ root }) => {
     await rm(join(root, ".claude/skills"), { recursive: true, force: true });
