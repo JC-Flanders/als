@@ -426,6 +426,14 @@ test("alsc deploy codex dry-run exposes the Codex deploy surface", async () => {
         kind: "generated_codex_guidance",
         target_path: ".als/AGENTS.md",
       },
+      {
+        kind: "generated_codex_hooks",
+        target_path: ".codex/hooks.json",
+      },
+      {
+        kind: "generated_codex_config",
+        target_path: ".codex/config.toml",
+      },
     ]);
     expect(output.planned_skills.map((plan) => plan.target_dir)).toEqual([
       ".agents/skills/factory-operate",

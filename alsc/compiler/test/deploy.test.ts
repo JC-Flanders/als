@@ -228,6 +228,14 @@ test("deploy CLI dry-run reports Codex projection paths", { timeout: 180_000 }, 
         kind: "generated_codex_guidance",
         target_path: ".als/AGENTS.md",
       },
+      {
+        kind: "generated_codex_hooks",
+        target_path: ".codex/hooks.json",
+      },
+      {
+        kind: "generated_codex_config",
+        target_path: ".codex/config.toml",
+      },
     ]);
     expect(output.planned_skills.map((plan) => plan.target_dir)).toEqual([
       ".agents/skills/factory-operate",
@@ -239,6 +247,8 @@ test("deploy CLI dry-run reports Codex projection paths", { timeout: 180_000 }, 
     expect(output.written_skill_count).toBe(0);
     expect(output.written_delamain_count).toBe(0);
     expect(existsSync(join(root, ".als/AGENTS.md"))).toBe(false);
+    expect(existsSync(join(root, ".codex/hooks.json"))).toBe(false);
+    expect(existsSync(join(root, ".codex/config.toml"))).toBe(false);
     expect(existsSync(join(root, ".agents/skills"))).toBe(false);
     expect(existsSync(join(root, ".codex/delamains"))).toBe(false);
   });
@@ -266,10 +276,16 @@ test("deploy CLI projects Codex skills, guidance, and Delamain runtime", { timeo
       written_delamain_count: number;
     };
     expect(output.status).toBe("pass");
-    expect(output.written_system_file_count).toBe(1);
+    expect(output.written_system_file_count).toBe(3);
     expect(output.written_skill_count).toBe(1);
     expect(output.written_delamain_count).toBe(1);
     expect(readFileSync(join(root, ".als/AGENTS.md"), "utf-8")).toBe(ALS_CODEX_SYSTEM_INSTRUCTION_CONTENTS);
+    const hooksJson = readFileSync(join(root, ".codex/hooks.json"), "utf-8");
+    expect(hooksJson).toContain("\"SessionStart\"");
+    expect(hooksJson).toContain("\"PostToolUse\"");
+    expect(hooksJson).toContain("\"Stop\"");
+    expect(hooksJson).toContain("codex-post-edit-validate.sh");
+    expect(readFileSync(join(root, ".codex/config.toml"), "utf-8")).toContain("codex_hooks = true");
     const skill = readFileSync(join(root, ".agents/skills/factory-operate/SKILL.md"), "utf-8");
     expect(skill).toContain("name: factory-operate");
     expect(skill).not.toContain("CLAUDE_PLUGIN_ROOT");

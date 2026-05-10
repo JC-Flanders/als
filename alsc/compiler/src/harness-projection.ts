@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { loadAuthoredSourceExport } from "./authored-load.ts";
@@ -43,6 +43,7 @@ interface HarnessProjectionSpec extends HarnessRuntimeSpec {
   system_instruction_contents: string;
   target_collision_roots_label: string;
   transform_projected_skill_text?: (value: string) => string;
+  extra_system_file_plans?: (systemRootAbs: string) => HarnessSystemInstructionWorkPlan[];
 }
 
 interface HarnessSkillProjectionWorkPlan extends HarnessSkillProjectionPlan {
@@ -108,6 +109,8 @@ const CANONICAL_DISPATCHER_TEMPLATE_DIR = resolve(
   import.meta.dir,
   "../../../delamain-dispatcher",
 );
+const ALS_PLUGIN_ROOT = resolve(import.meta.dir, "../../..");
+const ALS_CODEX_HOOKS_DIR = resolve(ALS_PLUGIN_ROOT, "hooks");
 
 export const ALS_CLAUDE_SYSTEM_INSTRUCTION_CONTENTS = `# .als Directory
 
@@ -135,6 +138,10 @@ The compiler reads from \`.als/\` and projects Codex runtime assets into \`.agen
 Customize the system through ALS skills, not by editing \`.als/\` files directly.
 `;
 
+const ALS_CODEX_CONFIG_TOML_CONTENTS = `[features]
+codex_hooks = true
+`;
+
 const HARNESS_PROJECTION_SPECS: Record<HarnessTarget, HarnessProjectionSpec> = {
   claude: {
     ...getHarnessRuntimeSpec("claude"),
@@ -150,6 +157,7 @@ const HARNESS_PROJECTION_SPECS: Record<HarnessTarget, HarnessProjectionSpec> = {
     system_instruction_contents: ALS_CODEX_SYSTEM_INSTRUCTION_CONTENTS,
     target_collision_roots_label: ".agents/skills or .codex/delamains",
     transform_projected_skill_text: rewriteCodexProjectedSkillText,
+    extra_system_file_plans: buildCodexSystemFilePlans,
   },
 };
 
@@ -596,7 +604,95 @@ function buildSystemFilePlans(systemRootAbs: string, spec: HarnessProjectionSpec
       target_path_abs: targetPathAbs,
       contents: spec.system_instruction_contents,
     },
+    ...(spec.extra_system_file_plans?.(systemRootAbs) ?? []),
   ];
+}
+
+function buildCodexSystemFilePlans(systemRootAbs: string): HarnessSystemInstructionWorkPlan[] {
+  const hooksPathAbs = resolve(systemRootAbs, ".codex/hooks.json");
+  const configPathAbs = resolve(systemRootAbs, ".codex/config.toml");
+  const plans: HarnessSystemInstructionWorkPlan[] = [
+    {
+      kind: "generated_codex_hooks",
+      target_path: toSystemRelative(systemRootAbs, hooksPathAbs),
+      target_path_abs: hooksPathAbs,
+      contents: buildCodexHooksJson(),
+    },
+  ];
+
+  if (!existsSync(configPathAbs)) {
+    plans.push({
+      kind: "generated_codex_config",
+      target_path: toSystemRelative(systemRootAbs, configPathAbs),
+      target_path_abs: configPathAbs,
+      contents: ALS_CODEX_CONFIG_TOML_CONTENTS,
+    });
+  }
+
+  return plans;
+}
+
+function buildCodexHooksJson(): string {
+  const command = (scriptName: string): string => (
+    `ALS_PLUGIN_ROOT=${shellQuote(ALS_PLUGIN_ROOT)} bash ${shellQuote(resolve(ALS_CODEX_HOOKS_DIR, scriptName))}`
+  );
+
+  return JSON.stringify(
+    {
+      hooks: {
+        SessionStart: [
+          {
+            matcher: "startup|resume|clear",
+            hooks: [
+              {
+                type: "command",
+                command: command("codex-session-start-operator.sh"),
+                timeout: 10,
+                statusMessage: "Loading ALS operator profile",
+              },
+            ],
+          },
+        ],
+        PostToolUse: [
+          {
+            matcher: "apply_patch|Edit|Write",
+            hooks: [
+              {
+                type: "command",
+                command: command("codex-post-edit-breadcrumb.sh"),
+                timeout: 5,
+                statusMessage: "Recording ALS edit",
+              },
+              {
+                type: "command",
+                command: command("codex-post-edit-validate.sh"),
+                timeout: 15,
+                statusMessage: "Validating ALS edit",
+              },
+            ],
+          },
+        ],
+        Stop: [
+          {
+            hooks: [
+              {
+                type: "command",
+                command: command("codex-stop-gate.sh"),
+                timeout: 30,
+                statusMessage: "Checking ALS validation gate",
+              },
+            ],
+          },
+        ],
+      },
+    },
+    null,
+    2,
+  ) + "\n";
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
 }
 
 function loadModuleShapeForProjection(
