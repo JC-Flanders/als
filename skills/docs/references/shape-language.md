@@ -21,7 +21,7 @@ import { defineSystem, defineModule, defineDelamain } from "als:authoring";
 import { COMPATIBILITY_CLASSES } from "als:contracts";
 ```
 
-`als:authoring` and `als:contracts` are resolved by ALS-owned evaluation paths. Authored systems do not carry a local `.als/authoring.ts` shim in the v3 contract.
+`als:authoring` and `als:contracts` are resolved by ALS-owned evaluation paths. Authored systems do not carry a local `.als/authoring.ts` shim in the v4 contract.
 
 The helpers are identity functions. Their job is to give TypeScript a stable typed authoring surface.
 
@@ -33,7 +33,7 @@ The helpers are identity functions. Their job is to give TypeScript a stable typ
 import { defineSystem } from "als:authoring";
 
 export const system = defineSystem({
-  als_version: 3,
+  als_version: 4,
   system_id: "reference-system",
   modules: {
     backlog: {
@@ -470,6 +470,7 @@ export const delamain = defineDelamain({
       initial: true,
       phase: "intake",
       actor: "operator",
+      label: "Draft",
     },
     "in-dev": {
       phase: "implementation",
@@ -477,15 +478,32 @@ export const delamain = defineDelamain({
       resumable: true,
       "session-field": "dev_session",
       path: "agents/in-dev.md",
+      label: "In development",
     },
     completed: {
       phase: "closed",
       terminal: true,
+      label: "Completed",
+      outcome: "success",
+    },
+    cancelled: {
+      phase: "closed",
+      terminal: true,
+      label: "Stopped",
+      outcome: "stopped",
+    },
+    failed: {
+      phase: "closed",
+      terminal: true,
+      label: "Failed",
+      outcome: "errored",
     },
   },
   transitions: [
     { class: "advance", from: "draft", to: "in-dev" },
     { class: "exit", from: "in-dev", to: "completed" },
+    { class: "exit", from: "in-dev", to: "cancelled" },
+    { class: "exit", from: "in-dev", to: "failed" },
   ],
 } as const);
 
@@ -497,6 +515,9 @@ Rules:
 - Delamain registry paths in `module.ts` are module-bundle-relative.
 - Delamain-local agent asset paths inside `delamain.ts` are Delamain-bundle-relative.
 - Delamain prompt assets stay filesystem assets beside the authored definition.
+- Every authored state declares `label`.
+- Every terminal authored state declares `outcome: "success" | "stopped" | "errored"`.
+- Authors do not declare `customer_bucket`; the compiler projects it into deployed `delamain.yaml`.
 - Dispatcher template version is runtime asset metadata. It is not declared in `module.ts`, authored `delamain.ts`, `runtime-manifest.json`, or record frontmatter.
 - For agent file format (frontmatter keys, body-as-prompt, sub-agents), see `delamain-agents.md`.
 
@@ -529,7 +550,7 @@ Rules:
 
 ## Deployment Note
 
-Authored Delamains are TypeScript, but Claude deploy still writes a runtime `delamain.yaml` into `.claude/delamains/{name}/` beside `runtime-manifest.json` so existing dispatchers keep the same downstream contract.
+Authored Delamains are TypeScript, but Claude deploy still writes a runtime `delamain.yaml` into `.claude/delamains/{name}/` beside `runtime-manifest.json` so existing dispatchers keep the same downstream contract. The deployed state shape preserves authored `label` and terminal `outcome` and adds compiler-derived `customer_bucket`.
 
 ## Detailed Rules
 
@@ -538,7 +559,7 @@ Authored Delamains are TypeScript, but Claude deploy still writes a runtime `del
 ### system.ts Detailed Rules
 
 - `als_version` is required and must be a positive integer.
-- ALS currently supports `als_version` values 1, 2, and 3.
+- ALS currently supports `als_version` values 1, 2, 3, and 4.
 - ALS language-version upgrades remain whole-system cutovers. Mixed authored ALS versions inside one system are not part of the v1 contract.
 - `system_id` is required and must be a non-empty string.
 - Module ids must match `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`.
@@ -860,11 +881,15 @@ Use `outline` when the heading tree itself is part of the schema contract. Use `
 - Delamain primary definition files declare ordered `phases`, authoritative `states`, and explicit `transitions`.
 - Each Delamain definition has exactly one `initial: true` state.
 - Every state declares `phase`.
+- Every state declares a non-empty `label`.
 - Every declared phase must contain at least one state.
 - The initial state must be in the first declared phase.
 - Terminal states must be in the last declared phase.
+- Terminal states declare `outcome: "success" | "stopped" | "errored"`.
 - Non-terminal states declare `actor: "operator" | "agent"`.
+- Non-terminal states do not declare `outcome`.
 - Terminal states do not declare `actor`.
+- Deployed `delamain.yaml` includes compiler-projected `customer_bucket` on every state. Authored `delamain.ts` does not declare it.
 - Delamain does not require operator-owned non-terminal states; fully autonomous lifecycles are allowed.
 - `advance` and `rework` use a single-state `from`.
 - `exit` uses a single-state `from` or a non-empty list-valued `from`.
