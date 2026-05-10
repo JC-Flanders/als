@@ -31,6 +31,19 @@ test("collector enriches dispatcher snapshots with runtime metadata and item cou
         to: "in-dev",
       },
     ]);
+    expect(dispatcher.states["queued"]).toMatchObject({
+      label: "AI queued the work",
+      customerBucket: "active",
+    });
+    expect(dispatcher.states["completed"]).toMatchObject({
+      outcome: "success",
+      customerBucket: "closed_success",
+    });
+    expect(dispatcher.items[0]).toMatchObject({
+      id: "ALS-001",
+      title: "Build canonical feed",
+      updated: "2026-04-17T10:14:00.000Z",
+    });
     expect(dispatcher.states["queued"]?.provider).toBe("anthropic");
     expect(dispatcher.runtime.available).toBe(true);
     expect(dispatcher.runtime.active[0]?.item_id).toBe("ALS-001");
@@ -40,6 +53,7 @@ test("collector enriches dispatcher snapshots with runtime metadata and item cou
       provider: "anthropic",
       state: "in-dev",
       status: "active",
+      transitionTargets: ["in-review"],
     });
     expect(dispatcher.telemetry.available).toBe(true);
     expect(dispatcher.recentRun?.outcome).toBe("success");
@@ -123,6 +137,7 @@ test("collector widens journey telemetry across active guarded blocked and orpha
         age_ms: 60_000,
         provider: "openai",
         status: "active",
+        transitionTargets: ["in-review"],
       },
       {
         dispatchId: "d-als-002",
@@ -131,6 +146,7 @@ test("collector widens journey telemetry across active guarded blocked and orpha
         age_ms: 75_000,
         provider: "anthropic",
         status: "guarded",
+        transitionTargets: ["in-review"],
       },
       {
         dispatchId: "d-als-003",
@@ -139,6 +155,7 @@ test("collector widens journey telemetry across active guarded blocked and orpha
         age_ms: 105_000,
         provider: "openai",
         status: "blocked",
+        transitionTargets: ["in-review"],
       },
       {
         dispatchId: "d-als-004",
@@ -147,6 +164,7 @@ test("collector widens journey telemetry across active guarded blocked and orpha
         age_ms: 135_000,
         provider: "anthropic",
         status: "orphaned",
+        transitionTargets: ["in-review"],
       },
     ]);
   } finally {
